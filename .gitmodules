@@ -1,0 +1,6 @@
+[submodule "deps/googletest"]
+	path = deps/googletest
+	url = https://github.com/google/googletest.git
+[submodule "deps/relic"]
+	path = deps/relic
+	url = https://github.com/relic-toolkit/relic.git
