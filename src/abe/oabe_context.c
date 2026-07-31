@@ -37,6 +37,72 @@
 #include "openabe/oabe_policy.h"
 #include "openabe/oabe_hash.h"
 #include "openabe/oabe_ciphertext.h"
+#include <openssl/evp.h>
+#include <openssl/sha.h>
+#include <openssl/rand.h>
+
+/* ---- DEM (Data Encapsulation Mechanism) helpers -------------------------
+ * The CP-ABE KEM produces an encapsulated GT element e(g1,g2)^(alpha*s).
+ * We hash it to a 32-byte symmetric key and AES-256-GCM the plaintext, so a
+ * holder of an attribute-satisfying user key can recover the symmetric key
+ * (via Lagrange interpolation) and decrypt the message. The AES blob
+ * (IV(12) + tag(16) + ciphertext) is carried in ct->encrypted_key, which the
+ * existing serializer/deserializer already round-trips. */
+static OABE_ERROR _dem_derive_symkey(const OABE_GT *gt, uint8_t key[32]) {
+  OABE_ByteString *bs = NULL;
+  OABE_ERROR rc = oabe_gt_serialize(gt, &bs);
+  if (rc != OABE_SUCCESS || !bs) return rc;
+  SHA256(oabe_bytestring_get_const_ptr(bs), oabe_bytestring_get_size(bs), key);
+  oabe_bytestring_free(bs);
+  return OABE_SUCCESS;
+}
+
+static OABE_ERROR _dem_aes_gcm_encrypt(const uint8_t key[32],
+                                         const uint8_t *plaintext, size_t plaintext_len,
+                                         uint8_t iv[12], uint8_t tag[16],
+                                         uint8_t **ct_out, size_t *ct_len) {
+  if (RAND_bytes(iv, 12) != 1) return OABE_ERROR_INVALID_RNG;
+  EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+  if (!ctx) return OABE_ERROR_OUT_OF_MEMORY;
+  OABE_ERROR rc = OABE_ERROR_ENCRYPTION_ERROR;
+  uint8_t *ct = (uint8_t *)oabe_malloc(plaintext_len + 16);
+  if (!ct) { EVP_CIPHER_CTX_free(ctx); return OABE_ERROR_OUT_OF_MEMORY; }
+  int outl = 0, finall = 0;
+  if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
+      EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+      EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) goto done;
+  if (EVP_EncryptUpdate(ctx, ct, &outl, plaintext, (int)plaintext_len) != 1) goto done;
+  if (EVP_EncryptFinal_ex(ctx, ct + outl, &finall) != 1) goto done;
+  if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag) != 1) goto done;
+  *ct_out = ct;
+  *ct_len = (size_t)outl + (size_t)finall;
+  rc = OABE_SUCCESS;
+done:
+  if (rc != OABE_SUCCESS) oabe_free(ct);
+  EVP_CIPHER_CTX_free(ctx);
+  return rc;
+}
+
+static OABE_ERROR _dem_aes_gcm_decrypt(const uint8_t key[32],
+                                         const uint8_t iv[12], const uint8_t tag[16],
+                                         const uint8_t *ct, size_t ct_len,
+                                         uint8_t *plaintext, size_t *plaintext_len) {
+  EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+  if (!ctx) return OABE_ERROR_OUT_OF_MEMORY;
+  OABE_ERROR rc = OABE_ERROR_DECRYPTION_FAILED;
+  int outl = 0, finall = 0;
+  if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
+      EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+      EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1 ||
+      EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void *)tag) != 1) goto done;
+  if (EVP_DecryptUpdate(ctx, plaintext, &outl, ct, (int)ct_len) != 1) goto done;
+  if (EVP_DecryptFinal_ex(ctx, plaintext + outl, &finall) != 1) goto done;
+  *plaintext_len = (size_t)outl + (size_t)finall;
+  rc = OABE_SUCCESS;
+done:
+  EVP_CIPHER_CTX_free(ctx);
+  return rc;
+}
 
 /*============================================================================
  * Helper functions for key element serialization
@@ -1069,6 +1135,28 @@ OABE_ERROR oabe_context_cp_encrypt(OABE_ContextCP *ctx, const char *policy,
     oabe_lsss_free_coefficients(shares, share_attrs, num_shares);
     oabe_zp_free(s);
 
+    /* DEM: hash the encapsulated GT element (e(g1,g2)^(alpha*s)) to a 32-byte
+     * symmetric key and AES-256-GCM the plaintext. Store IV+tag+ciphertext in
+     * ct->encrypted_key (already round-tripped by the serializer). */
+    {
+      uint8_t symkey[32];
+      rc = _dem_derive_symkey(ct->ct, symkey);
+      if (rc != OABE_SUCCESS) { oabe_cp_ct_free(ct); return rc; }
+      uint8_t iv[12], tag[16];
+      uint8_t *aes_ct = NULL;
+      size_t aes_ct_len = 0;
+      rc = _dem_aes_gcm_encrypt(symkey, plaintext, plaintext_len, iv, tag, &aes_ct, &aes_ct_len);
+      OPENSSL_cleanse(symkey, sizeof(symkey));
+      if (rc != OABE_SUCCESS) { oabe_cp_ct_free(ct); return rc; }
+      /* Pack IV(12) + tag(16) + aes_ct into encrypted_key. */
+      ct->encrypted_key = oabe_bytestring_new();
+      if (!ct->encrypted_key) { oabe_free(aes_ct); oabe_cp_ct_free(ct); return OABE_ERROR_OUT_OF_MEMORY; }
+      oabe_bytestring_append_data(ct->encrypted_key, iv, 12);
+      oabe_bytestring_append_data(ct->encrypted_key, tag, 16);
+      oabe_bytestring_append_data(ct->encrypted_key, aes_ct, aes_ct_len);
+      oabe_free(aes_ct);
+    }
+
     /* Serialize ciphertext */
     rc = oabe_cp_ct_serialize(ct, ciphertext);
     oabe_cp_ct_free(ct);
@@ -1264,32 +1352,45 @@ OABE_ERROR oabe_context_cp_decrypt(OABE_ContextCP *ctx, const char *key_id,
     oabe_gt_free(denominator);
     oabe_lsss_free_coefficients(coefficients, coeff_attrs, num_coeff);
 
-    /* Verify decryption by comparing to ct->ct */
-    /* In correct decryption, decrypted_key should equal e(g1, g2)^(alpha * s) */
+    /* Verify decryption by comparing to ct->ct, then derive the symmetric
+     * key from the recovered GT element (before freeing it) and AES-256-GCM
+     * decrypt the payload stored in ct->encrypted_key (IV(12)+tag(16)+ct). */
     bool keys_match = oabe_gt_equals(decrypted_key, ct->ct);
+    uint8_t symkey[32];
+    OABE_ERROR dem_rc = OABE_ERROR_DECRYPTION_FAILED;
+    if (keys_match) {
+      dem_rc = _dem_derive_symkey(decrypted_key, symkey);
+    }
     oabe_gt_free(decrypted_key);
 
-    if (!keys_match) {
-        oabe_cp_ct_free(ct);
-        return OABE_ERROR_DECRYPTION_FAILED;
+    if (!keys_match || dem_rc != OABE_SUCCESS) {
+      oabe_cp_ct_free(ct);
+      return OABE_ERROR_DECRYPTION_FAILED;
     }
 
-    /* In KEM mode, return the encapsulated key */
-    /* For now, we use a simple approach: derive a symmetric key from the GT element */
-    /* TODO: Implement proper KEM-DEM */
-
-    /* Set plaintext to a dummy value for now */
-    /* In full implementation, the ciphertext would include encrypted message */
-    size_t key_size = ct->encrypted_key ? ct->encrypted_key->size : 0;
-    if (*plaintext_len < key_size) {
-        oabe_cp_ct_free(ct);
-        return OABE_ERROR_BUFFER_TOO_SMALL;
+    if (!ct->encrypted_key || oabe_bytestring_get_size(ct->encrypted_key) < 28) {
+      OPENSSL_cleanse(symkey, sizeof(symkey));
+      oabe_cp_ct_free(ct);
+      return OABE_ERROR_INVALID_CIPHERTEXT;
     }
-
-    /* For now, return success */
-    *plaintext_len = 0;
-
+    const uint8_t *blob = oabe_bytestring_get_const_ptr(ct->encrypted_key);
+    size_t blob_len = oabe_bytestring_get_size(ct->encrypted_key);
+    const uint8_t *iv = blob;
+    const uint8_t *tag = blob + 12;
+    const uint8_t *aes_ct = blob + 28;
+    size_t aes_ct_len = blob_len - 28;
+    if (*plaintext_len < aes_ct_len) {
+      OPENSSL_cleanse(symkey, sizeof(symkey));
+      oabe_cp_ct_free(ct);
+      return OABE_ERROR_BUFFER_TOO_SMALL;
+    }
+    size_t out_len = 0;
+    OABE_ERROR dec_rc = _dem_aes_gcm_decrypt(symkey, iv, tag, aes_ct, aes_ct_len,
+                                               plaintext, &out_len);
+    OPENSSL_cleanse(symkey, sizeof(symkey));
     oabe_cp_ct_free(ct);
+    if (dec_rc != OABE_SUCCESS) return dec_rc;
+    *plaintext_len = out_len;
     return OABE_SUCCESS;
 }
 
