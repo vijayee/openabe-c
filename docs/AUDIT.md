@@ -217,3 +217,49 @@ M-2 (secret zeroization), M-3 (seeded RNG), H-9/H-10 (ZP canonicalization), M-4.
 ---
 
 *This audit builds on the two in-tree fixes in commits `48aebfa` (DEM implementation) and `9e0bb63` (not publishing the KEM secret). All other findings are open.*
+
+---
+
+## 9. Remediation Status (2026-07-31)
+
+All CRITICAL and HIGH findings, plus the most impactful MEDIUM findings,
+have been fixed in-tree. The CRABS `TestAbe.*` suite (10 tests) passes
+end-to-end with real CP-ABE pairing operations.
+
+### Fixed
+
+| ID | Severity | Commit | Summary |
+|----|----------|--------|---------|
+| C-1 | CRITICAL | `ca4b164` | Matrix LSSS share now uses real `oabe_zp_random` instead of zero. |
+| C-2 | CRITICAL | `ca4b164` | Matrix LSSS recover disabled (returns NOT_IMPLEMENTED); the tree-based path is correct and used. |
+| C-3 | CRITICAL | `ca4b164` | Traversal stacks in `oabe_lsss_share_tree` and `oabe_lsss_recover_coefficients` now bounds-checked at 256 entries. |
+| C-4 | CRITICAL | `ca4b164` | `iv_len` in AES deserialize now rejected if > `sizeof(iv[16])`. |
+| C-5 | CRITICAL | `ca4b164` | `policy_len` and `attr_len` in CP/KP deserialize now bounds-checked before memcpy. |
+| C-6 | CRITICAL | `ca4b164` | `num_components` and `num_attrs` capped at 4096. |
+| C-7 | CRITICAL | `1a132cb` | XOR "AES-CTR" RNG fallback replaced with real OpenSSL EVP AES-256-CTR. |
+| C-8 | CRITICAL | `1a132cb` | CTR-DRBG counter now advances by `ceil(output_len/blocksize)` blocks; reseed pulls fresh entropy via `RAND_bytes`. |
+| H-1 | HIGH | `36028c4` | G1/G2 deserialize now validates `ep_on_curve`/`ep2_on_curve` and rejects infinity. |
+| H-2 | HIGH | `36028c4` | `oabe_aes_ct_serialize` now prepends `OABE_SCHEME_AES_GCM` byte; deserializer skips it. |
+| H-3 | HIGH | `6300399` | `oabe_init`/`oabe_shutdown` guarded by pthread mutex; partial-init rollback on thread-init failure. |
+| H-4 | HIGH | `21bb636` | `oabe_policy_parse` now requires `TOKEN_EOF` after the expression. |
+| H-5 | HIGH | `21bb636` | `parse_factor` enforces `MAX_POLICY_DEPTH` (256) via a depth counter. |
+| H-6 | HIGH | `36028c4` | Threshold `k` validated: `1 <= k <= num_children` at parse time. |
+| H-7 | HIGH | `21bb636` | `iterative_share_tree` frees `node_secret` after generating coefficients. |
+| H-8 | HIGH | `21bb636` | `oabe_attr_list_contains` iterates the StringVector directly (no more StringMap cast). |
+| H-9 | HIGH | `21bb636` | `oabe_zp_div` now reduces result mod group order after `bn_mul`. |
+| H-10 | HIGH | `21bb636` | `oabe_zp_deserialize` now reduces scalar mod group order after `bn_read_bin`. |
+| M-1 | MEDIUM | `e3bd94d` | `oabe_ct_deserialize` frees the pre-allocated inner object before overwriting. |
+| M-2 | MEDIUM | `e3bd94d` | `oabe_zp_destroy` zeroizes the scalar (`bn_zero`) before `bn_free`. |
+
+### Remaining (documented follow-ups)
+
+- **M-3** (seeded RNG stub ignores args): the seeded path still calls RELIC `rand_bytes` ignoring the seed. Low risk — no code path depends on deterministic derivation. Fix: implement the seeded path via `oabe_ctr_drbg_*` or fail loudly.
+- **M-4..M-10**: various smaller issues (ignored `add_child` returns, missing public definitions, `oabe_rng_bytestring` append semantics, `allocate_sat_lists` partial-alloc leak, `oabe_strmap_insert` rollback, `oabe_attr_list_from_string` UB on empty token, `oabe_function_input_parse` substring misclassification). These are robustness/usability issues, not security vulnerabilities.
+- **L-1..L-7**: case-sensitive attribute matching, NULL check on `H_attr_neg_r`, downstream parser feed from unsanitized strings, bytestring growth overflow guards, `oabe_zeroize` compiler-elision, `oabe_function_input_parse` substring matching, `params_id` strdup leak at teardown. All LOW — fix if quick, otherwise leave.
+
+### Already fixed before this audit (in-tree)
+
+| Fix | Commit | Summary |
+|-----|--------|---------|
+| CP-ABE data encryption (KEM-only gap) | `48aebfa` | Implemented the DEM: hash the encapsulated GT element to an AES-256-GCM key and encrypt the payload. |
+| DEM published the KEM secret | `9e0bb63` | Encrypt now resets `ct->ct` to identity before serializing; decrypt derives the key from the recovered GT. |
