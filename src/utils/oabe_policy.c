@@ -229,6 +229,7 @@ typedef struct {
     TokenType current_token;
     char token_value[256];
     size_t token_len;
+    int depth;  /* recursion depth for stack-exhaustion protection (H-5) */
 } PolicyParser;
 
 static void skip_whitespace(PolicyParser *p) {
@@ -414,7 +415,17 @@ static OABE_PolicyNode* parse_threshold_list(PolicyParser *p) {
     return NULL;
 }
 
+static OABE_PolicyNode* parse_factor_impl(PolicyParser *p);
 static OABE_PolicyNode* parse_factor(PolicyParser *p) {
+    if (++p->depth > MAX_POLICY_DEPTH) {
+        p->depth--;
+        return NULL;
+    }
+    OABE_PolicyNode *r = parse_factor_impl(p);
+    p->depth--;
+    return r;
+}
+static OABE_PolicyNode* parse_factor_impl(PolicyParser *p) {
     if (p->current_token == TOKEN_LPAREN) {
         next_token(p);  /* Skip '(' */
 
@@ -521,13 +532,24 @@ OABE_ERROR oabe_policy_parse(const char *policy, OABE_PolicyTree **tree) {
         .pos = 0,
         .len = strlen(policy),
         .current_token = TOKEN_NONE,
-        .token_len = 0
+        .token_len = 0,
+        .depth = 0
     };
 
     next_token(&parser);
 
     OABE_PolicyNode *root = parse_expression(&parser);
     if (!root) {
+        return OABE_ERROR_INVALID_POLICY;
+    }
+
+    /* Require that the entire policy string was consumed (audit H-4:
+     * without this, trailing garbage after a valid expression is silently
+     * discarded, and combined with fixed 256-byte token truncation, an
+     * attribute longer than 255 chars has its tail dropped, causing
+     * attribute impersonation). */
+    if (parser.current_token != TOKEN_EOF) {
+        oabe_policy_node_free(root);
         return OABE_ERROR_INVALID_POLICY;
     }
 
@@ -692,8 +714,16 @@ OABE_ERROR oabe_attr_list_remove(OABE_AttributeList *list, const char *attr) {
 }
 
 bool oabe_attr_list_contains(const OABE_AttributeList *list, const char *attr) {
-    if (!list || !attr) return false;
-    return oabe_strmap_contains((const OABE_StringMap *)list->attributes, attr);
+    if (!list || !attr || !list->attributes) return false;
+    /* Iterate the StringVector directly (audit H-8: the prior code cast the
+     * vector to StringMap, reading the vector's capacity as the map's size
+     * and strcmp-ing beyond the vector's actual entries). */
+    for (size_t i = 0; i < list->attributes->size; i++) {
+        if (list->attributes->items[i] && strcmp(list->attributes->items[i], attr) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 size_t oabe_attr_list_get_count(const OABE_AttributeList *list) {
@@ -1410,6 +1440,14 @@ static OABE_ERROR iterative_share_tree(OABE_PolicyNode *root, OABE_ZP *secret,
                 oabe_zp_free(coefficients[j]);
             }
             oabe_free(coefficients);
+
+            /* Free the node's share (node_secret) - it was consumed to
+             * generate polynomial coefficients and is no longer needed.
+             * Without this, one OABE_ZP leaks per internal node per
+             * encryption (audit H-7). */
+            if (node_secret && node_secret != secret) {
+                oabe_zp_free(node_secret);
+            }
         }
     }
 

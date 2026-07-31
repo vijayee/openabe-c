@@ -383,12 +383,16 @@ OABE_ERROR oabe_zp_div(OABE_ZP *result, const OABE_ZP *a, const OABE_ZP *b) {
     OABE_ZP_Impl *r = (OABE_ZP_Impl *)result;
     OABE_ZP_Impl *ra = (OABE_ZP_Impl *)a;
     OABE_ZP_Impl *rb = (OABE_ZP_Impl *)b;
+    OABE_Group_Impl *g = (OABE_Group_Impl *)ra->group;
 
     bn_t inv;
     bn_null(inv);
     bn_new(inv);
-    bn_mod_inv(inv, rb->value, ((OABE_Group_Impl *)ra->group)->order);
+    bn_mod_inv(inv, rb->value, g->order);
     bn_mul(r->value, ra->value, inv);
+    /* Reduce the result mod group order (audit H-9: without this, the
+     * result can exceed the order, causing representation inconsistency). */
+    bn_mod(r->value, r->value, g->order);
     bn_free(inv);
     return OABE_SUCCESS;
 }
@@ -507,6 +511,10 @@ OABE_ERROR oabe_zp_deserialize(OABE_GroupHandle group, const OABE_ByteString *in
     OABE_ZP_Impl *impl = (OABE_ZP_Impl *)*zp;
     const uint8_t *data = oabe_bytestring_get_const_ptr(input) + index;
     bn_read_bin(impl->value, data, (int)len);
+    /* Reduce mod group order to ensure canonical representation (audit H-10:
+     * without this, non-canonical scalars cause inconsistent comparisons and
+     * serialized lengths for the same residue). */
+    bn_mod(impl->value, impl->value, ((OABE_Group_Impl *)impl->group)->order);
 
     return OABE_SUCCESS;
 }
