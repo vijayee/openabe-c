@@ -237,6 +237,9 @@ OABE_ERROR oabe_group_get_order(OABE_GroupHandle group, OABE_ByteString **result
 static void oabe_zp_destroy(void *ptr) {
     OABE_ZP_Impl *zp = (OABE_ZP_Impl *)ptr;
     if (zp) {
+        /* Zeroize the scalar before freeing (audit M-2: RELIC's bn_free does
+         * not wipe, so master-secret scalars remain in freed heap). */
+        bn_zero(zp->value);
         bn_free(zp->value);
         if (zp->group) oabe_group_free(zp->group);
         oabe_free(zp);

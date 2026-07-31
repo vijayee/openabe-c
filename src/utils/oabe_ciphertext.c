@@ -1006,12 +1006,18 @@ OABE_ERROR oabe_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString *in
     OABE_ERROR rc;
     switch (type) {
         case OABE_CT_TYPE_AES_GCM:
+            /* Free the pre-allocated inner object before the deserializer
+             * overwrites the pointer (audit M-1: without this, every
+             * deserialize leaks the pre-allocated inner struct). */
+            if ((*ct)->data.aes) { oabe_aes_ct_free((*ct)->data.aes); (*ct)->data.aes = NULL; }
             rc = oabe_aes_ct_deserialize(input, &(*ct)->data.aes);
             break;
         case OABE_CT_TYPE_CP_ABE:
+            if ((*ct)->data.cp) { oabe_cp_ct_free((*ct)->data.cp); (*ct)->data.cp = NULL; }
             rc = oabe_cp_ct_deserialize(group, input, &(*ct)->data.cp);
             break;
         case OABE_CT_TYPE_KP_ABE:
+            if ((*ct)->data.kp) { oabe_kp_ct_free((*ct)->data.kp); (*ct)->data.kp = NULL; }
             rc = oabe_kp_ct_deserialize(group, input, &(*ct)->data.kp);
             break;
         default:
