@@ -1137,7 +1137,14 @@ OABE_ERROR oabe_context_cp_encrypt(OABE_ContextCP *ctx, const char *policy,
 
     /* DEM: hash the encapsulated GT element (e(g1,g2)^(alpha*s)) to a 32-byte
      * symmetric key and AES-256-GCM the plaintext. Store IV+tag+ciphertext in
-     * ct->encrypted_key (already round-tripped by the serializer). */
+     * ct->encrypted_key (already round-tripped by the serializer).
+     *
+     * CRITICAL: the GT element ct->ct IS the KEM secret. If it were serialized
+     * into the ciphertext, anyone could compute SHA256 of its serialization and
+     * recover the AES key. We therefore reset ct->ct to the identity before
+     * serializing — the true secret is only reconstructible on the decrypt
+     * side via pairing-based Lagrange recovery, which requires a user key
+     * whose attributes satisfy the policy. */
     {
       uint8_t symkey[32];
       rc = _dem_derive_symkey(ct->ct, symkey);
@@ -1155,6 +1162,8 @@ OABE_ERROR oabe_context_cp_encrypt(OABE_ContextCP *ctx, const char *policy,
       oabe_bytestring_append_data(ct->encrypted_key, tag, 16);
       oabe_bytestring_append_data(ct->encrypted_key, aes_ct, aes_ct_len);
       oabe_free(aes_ct);
+      /* Neuter the serialized GT element so the KEM secret is not published. */
+      oabe_gt_set_identity(ct->ct);
     }
 
     /* Serialize ciphertext */
@@ -1352,18 +1361,18 @@ OABE_ERROR oabe_context_cp_decrypt(OABE_ContextCP *ctx, const char *key_id,
     oabe_gt_free(denominator);
     oabe_lsss_free_coefficients(coefficients, coeff_attrs, num_coeff);
 
-    /* Verify decryption by comparing to ct->ct, then derive the symmetric
-     * key from the recovered GT element (before freeing it) and AES-256-GCM
-     * decrypt the payload stored in ct->encrypted_key (IV(12)+tag(16)+ct). */
-    bool keys_match = oabe_gt_equals(decrypted_key, ct->ct);
+    /* Derive the symmetric key from the RECOVERED GT element. The recovered
+     * value is the KEM secret computed via pairing-based Lagrange recovery,
+     * which only succeeds for a user key whose attributes satisfy the policy.
+     * ct->ct in the ciphertext is the identity (the encrypt side neutralized
+     * it before serializing), so we do NOT compare against it — integrity is
+     * provided by the AES-GCM tag below. A wrong reconstruction (insufficient
+     * attributes or a tampered ciphertext) yields a wrong key and a GCM tag
+     * failure, reported as DECRYPTION_FAILED. */
     uint8_t symkey[32];
-    OABE_ERROR dem_rc = OABE_ERROR_DECRYPTION_FAILED;
-    if (keys_match) {
-      dem_rc = _dem_derive_symkey(decrypted_key, symkey);
-    }
+    OABE_ERROR dem_rc = _dem_derive_symkey(decrypted_key, symkey);
     oabe_gt_free(decrypted_key);
-
-    if (!keys_match || dem_rc != OABE_SUCCESS) {
+    if (dem_rc != OABE_SUCCESS) {
       oabe_cp_ct_free(ct);
       return OABE_ERROR_DECRYPTION_FAILED;
     }
