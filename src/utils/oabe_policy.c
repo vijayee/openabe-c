@@ -1016,11 +1016,7 @@ OABE_ERROR oabe_lsss_share(const OABE_LSSSMatrix *matrix, const OABE_ZP *secret,
                 oabe_free(random_values);
                 return OABE_ERROR_OUT_OF_MEMORY;
             }
-            /* Set random value - for now use 0 for deterministic testing
-             * In production, this should be: oabe_zp_random(random_values[i], rng);
-             * For proper LSSS, we need to pass an RNG, but for simplicity use 0
-             */
-            oabe_zp_set_zero(random_values[i]);
+            oabe_zp_random(random_values[i], NULL);
         }
     }
 
@@ -1186,56 +1182,15 @@ OABE_ERROR oabe_lsss_recover(const OABE_LSSSMatrix *matrix, OABE_ZP **shares,
 
     *secret = NULL;
 
-    if (shares_len == 0 || indices_len == 0 || shares_len != indices_len) {
-        return OABE_ERROR_INVALID_INPUT;
-    }
-
-    /* Get the group from the first share */
-    OABE_GroupHandle group = oabe_zp_get_group(shares[0]);
-
-    /* Allocate result */
-    OABE_ZP *result = oabe_zp_new(group);
-    if (!result) {
-        return OABE_ERROR_OUT_OF_MEMORY;
-    }
-
-    oabe_zp_set_zero(result);
-
-    /* Compute Lagrange interpolation at x = 0 */
-    /* secret = sum over i of L_i(0) * share_i */
-
-    OABE_ZP *coeff = NULL;
-    OABE_ZP *term = oabe_zp_new(group);
-
-    if (!term) {
-        oabe_zp_free(result);
-        return OABE_ERROR_OUT_OF_MEMORY;
-    }
-
-    for (size_t i = 0; i < indices_len; i++) {
-        /* Compute Lagrange coefficient L_i(0) */
-        OABE_ERROR rc = compute_lagrange_coefficient(group, (int)i, indices, indices_len, &coeff);
-        if (rc != OABE_SUCCESS) {
-            oabe_zp_free(result);
-            oabe_zp_free(term);
-            if (coeff) oabe_zp_free(coeff);
-            return rc;
-        }
-
-        /* term = coeff * shares[i] */
-        oabe_zp_mul(term, coeff, shares[i]);
-
-        /* result += term */
-        oabe_zp_add(result, result, term);
-
-        oabe_zp_free(coeff);
-        coeff = NULL;
-    }
-
-    oabe_zp_free(term);
-    *secret = result;
-
-    return OABE_SUCCESS;
+    /* This function is NOT IMPLEMENTED. The matrix-based LSSS reconstruction
+     * requires solving the linear system w · M = e_1 (finding reconstruction
+     * coefficients via Gaussian elimination over Zp), not Lagrange
+     * interpolation. The tree-based LSSS path
+     * (oabe_lsss_share_tree / oabe_lsss_recover_coefficients) is the correct
+     * and used implementation. Do not call this function. */
+    (void)shares_len;
+    (void)indices_len;
+    return OABE_ERROR_NOT_IMPLEMENTED;
 }
 
 const char* oabe_lsss_get_row_label(const OABE_LSSSMatrix *matrix, size_t row) {
@@ -1435,6 +1390,10 @@ static OABE_ERROR iterative_share_tree(OABE_PolicyNode *root, OABE_ZP *secret,
 
             /* Evaluate polynomial at points 1, 2, ..., num_children */
             for (uint32_t i = 0; i < num_children; i++) {
+                if (stack_top >= 256) {
+                    rc = OABE_ERROR_OUT_OF_MEMORY;
+                    break;
+                }
                 OABE_ZP *child_share = NULL;
                 rc = evaluate_polynomial(group, coefficients, threshold, (int)(i + 1), &child_share);
                 if (rc != OABE_SUCCESS) {
@@ -1495,6 +1454,10 @@ OABE_ERROR oabe_lsss_share_tree(OABE_PolicyNode *policy, OABE_ZP *secret,
             leaf_count++;
         } else {
             for (size_t i = 0; i < node->num_children; i++) {
+                if (stack_top >= 256) {
+                    oabe_free(stack);
+                    return OABE_ERROR_OUT_OF_MEMORY;
+                }
                 stack[stack_top++] = node->children[i];
             }
         }
@@ -1784,6 +1747,11 @@ OABE_ERROR oabe_lsss_recover_coefficients(OABE_PolicyNode *policy,
             if (node->sat_list[0]) leaf_count++;
         } else {
             for (size_t i = 0; i < node->num_children; i++) {
+                if (stack_top >= 256) {
+                    oabe_free(stack);
+                    free_sat_lists(policy);
+                    return OABE_ERROR_POLICY_NOT_SATISFIED;
+                }
                 stack[stack_top++] = node->children[i];
             }
         }

@@ -142,6 +142,15 @@ OABE_ERROR oabe_aes_ct_deserialize(const OABE_ByteString *input, OABE_AES_Cipher
         *ct = NULL;
         return rc;
     }
+    /* Reject IV lengths that don't fit the destination buffer (iv[16]).
+     * Without this, an attacker-controlled iv_len up to 255 causes a
+     * 239-byte heap overflow past iv[], clobbering the ciphertext pointer
+     * — a classic control-flow primitive. */
+    if (iv_len == 0 || iv_len > sizeof((*ct)->iv)) {
+        oabe_aes_ct_free(*ct);
+        *ct = NULL;
+        return OABE_ERROR_DESERIALIZATION_FAILED;
+    }
     (*ct)->iv_len = iv_len;
 
     /* Read IV */
@@ -445,6 +454,9 @@ OABE_ERROR oabe_cp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
     }
 
     if (policy_len > 0) {
+        if (index + policy_len > oabe_bytestring_get_size(input)) {
+            goto error;
+        }
         (*ct)->policy_string = (char *)oabe_malloc(policy_len + 1);
         if (!(*ct)->policy_string) {
             rc = OABE_ERROR_OUT_OF_MEMORY;
@@ -492,6 +504,9 @@ OABE_ERROR oabe_cp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
     if (rc != OABE_SUCCESS) {
         goto error;
     }
+    if (num_components > 4096) {
+        goto error;
+    }
 
     /* Allocate components */
     (*ct)->components = (OABE_CP_CiphertextComponent *)
@@ -508,6 +523,9 @@ OABE_ERROR oabe_cp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
         uint32_t attr_len;
         rc = oabe_bytestring_unpack32(input, &index, &attr_len);
         if (rc != OABE_SUCCESS) {
+            goto error;
+        }
+        if (attr_len > 4096 || index + attr_len > oabe_bytestring_get_size(input)) {
             goto error;
         }
 
@@ -779,6 +797,9 @@ OABE_ERROR oabe_kp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
     if (rc != OABE_SUCCESS) {
         goto error;
     }
+    if (num_attrs > 4096) {
+        goto error;
+    }
 
     /* Allocate arrays */
     if (num_attrs > 0) {
@@ -806,6 +827,9 @@ OABE_ERROR oabe_kp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
         uint32_t attr_len;
         rc = oabe_bytestring_unpack32(input, &index, &attr_len);
         if (rc != OABE_SUCCESS) {
+            goto error;
+        }
+        if (attr_len > 4096 || index + attr_len > oabe_bytestring_get_size(input)) {
             goto error;
         }
 
