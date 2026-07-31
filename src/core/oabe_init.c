@@ -52,6 +52,10 @@ static pthread_key_t g_thread_init_key;
 static pthread_once_t g_init_once = PTHREAD_ONCE_INIT;
 static volatile bool g_library_initialized = false;
 static volatile bool g_using_openssl = false;
+/* Guards init/shutdown against races (audit H-3: without this, two threads
+ * racing oabe_init() both run core_init(), and oabe_shutdown() can clean
+ * the RELIC backend while other threads hold RELIC-backed objects). */
+static pthread_mutex_t g_init_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /*============================================================================
  * Version Information
@@ -114,7 +118,9 @@ static void oabe_shutdown_thread(void) {
  *============================================================================*/
 
 OABE_ERROR oabe_init(void) {
+    pthread_mutex_lock(&g_init_lock);
     if (g_library_initialized) {
+        pthread_mutex_unlock(&g_init_lock);
         return OABE_SUCCESS;
     }
 
@@ -126,6 +132,7 @@ OABE_ERROR oabe_init(void) {
 
     /* Initialize PRNG */
     if (RAND_poll() != 1) {
+        pthread_mutex_unlock(&g_init_lock);
         return OABE_ERROR_INVALID_RNG;
     }
 
@@ -135,12 +142,14 @@ OABE_ERROR oabe_init(void) {
     core_init();
     if (core_get()->code != RLC_OK) {
         core_clean();
+        pthread_mutex_unlock(&g_init_lock);
         return OABE_ERROR_LIBRARY_NOT_INITIALIZED;
     }
 
     /* Initialize pairing-friendly curve parameters */
     if (ep_param_set_any_pairf() != RLC_OK) {
         core_clean();
+        pthread_mutex_unlock(&g_init_lock);
         return OABE_ERROR_LIBRARY_NOT_INITIALIZED;
     }
 
@@ -153,10 +162,18 @@ OABE_ERROR oabe_init(void) {
     /* Initialize per-thread state */
     OABE_ERROR rc = oabe_init_thread();
     if (rc != OABE_SUCCESS) {
+        /* Roll back the backend on thread-init failure (audit H-3: without
+         * this, the RELIC core is initialized but never cleaned up). */
+#if defined(WITH_RELIC)
+        pc_core_clean();
+        core_clean();
+#endif
+        pthread_mutex_unlock(&g_init_lock);
         return rc;
     }
 
     g_library_initialized = true;
+    pthread_mutex_unlock(&g_init_lock);
     return OABE_SUCCESS;
 }
 
@@ -202,7 +219,9 @@ OABE_ERROR oabe_init_without_openssl(void) {
 }
 
 OABE_ERROR oabe_shutdown(void) {
+    pthread_mutex_lock(&g_init_lock);
     if (!g_library_initialized) {
+        pthread_mutex_unlock(&g_init_lock);
         return OABE_SUCCESS;
     }
 
@@ -220,6 +239,7 @@ OABE_ERROR oabe_shutdown(void) {
 
     g_library_initialized = false;
     g_using_openssl = false;
+    pthread_mutex_unlock(&g_init_lock);
     return OABE_SUCCESS;
 }
 
