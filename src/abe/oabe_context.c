@@ -1267,7 +1267,7 @@ OABE_ERROR oabe_context_cp_decrypt(OABE_ContextCP *ctx, const char *key_id,
         /* Find the ciphertext component for this attribute */
         OABE_CP_CiphertextComponent *comp = NULL;
         for (size_t j = 0; j < ct->num_components; j++) {
-            if (strcmp(ct->components[j].attribute, attr) == 0) {
+            if (strcasecmp(ct->components[j].attribute, attr) == 0) {
                 comp = &ct->components[j];
                 break;
             }
@@ -1281,7 +1281,7 @@ OABE_ERROR oabe_context_cp_decrypt(OABE_ContextCP *ctx, const char *key_id,
         /* Find user's key component for this attribute */
         int key_attr_idx = -1;
         for (size_t j = 0; j < user_key->attributes->size; j++) {
-            if (strcmp(oabe_strvec_get(user_key->attributes, j), attr) == 0) {
+            if (strcasecmp(oabe_strvec_get(user_key->attributes, j), attr) == 0) {
                 key_attr_idx = (int)j;
                 break;
             }

@@ -726,7 +726,7 @@ OABE_ERROR oabe_attr_list_remove(OABE_AttributeList *list, const char *attr) {
 
     /* Find and remove attribute */
     for (size_t i = 0; i < list->attributes->size; i++) {
-        if (strcmp(oabe_strvec_get(list->attributes, i), attr) == 0) {
+        if (strcasecmp(oabe_strvec_get(list->attributes, i), attr) == 0) {
             return oabe_strvec_remove(list->attributes, i);
         }
     }
@@ -736,11 +736,11 @@ OABE_ERROR oabe_attr_list_remove(OABE_AttributeList *list, const char *attr) {
 
 bool oabe_attr_list_contains(const OABE_AttributeList *list, const char *attr) {
     if (!list || !attr || !list->attributes) return false;
-    /* Iterate the StringVector directly (audit H-8: the prior code cast the
-     * vector to StringMap, reading the vector's capacity as the map's size
-     * and strcmp-ing beyond the vector's actual entries). */
+    /* Case-insensitive match (audit L-1: parser keywords are case-insensitive
+     * but attribute matching was case-sensitive, causing fail-closed on
+     * case mismatches like "Doctor" vs "doctor"). */
     for (size_t i = 0; i < list->attributes->size; i++) {
-        if (list->attributes->items[i] && strcmp(list->attributes->items[i], attr) == 0) {
+        if (list->attributes->items[i] && strcasecmp(list->attributes->items[i], attr) == 0) {
             return true;
         }
     }
@@ -2081,7 +2081,7 @@ static bool has_attribute_recursive(const OABE_PolicyNode *node, const char *att
     if (!node || !attr) return false;
 
     if (node->type == OABE_POLICY_LEAF) {
-        return strcmp(node->attribute, attr) == 0;
+        return strcasecmp(node->attribute, attr) == 0;
     }
 
     /* Check children */
@@ -2185,7 +2185,7 @@ static bool check_satisfaction(const OABE_PolicyNode *node,
     if (node->type == OABE_POLICY_LEAF) {
         /* Check if this attribute is in the list */
         for (size_t i = 0; i < attributes->size; i++) {
-            if (strcmp(node->attribute, attributes->items[i]) == 0) {
+            if (strcasecmp(node->attribute, attributes->items[i]) == 0) {
                 return true;
             }
         }

@@ -197,15 +197,31 @@ OABE_ERROR oabe_symkey_deserialize(const OABE_ByteString *input, OABE_SymKey **k
 static void oabe_keystore_destroy(void *self) {
     OABE_KeyStore *store = (OABE_KeyStore *)self;
     if (store) {
-        /* Note: We don't free the keys themselves, just the maps */
-        /* The keys should be freed separately by the caller */
+        /* Free all keys before freeing the maps (audit L-7: previously the
+         * keys were leaked — only the map structures were freed, not the
+         * refcounted key objects they pointed to). */
         if (store->public_keys) {
+            for (size_t i = 0; i < store->public_keys->size; i++) {
+                if (store->public_keys->values[i]) {
+                    OABE_DEREF((OABE_Object *)store->public_keys->values[i]);
+                }
+            }
             oabe_strmap_free(store->public_keys);
         }
         if (store->secret_keys) {
+            for (size_t i = 0; i < store->secret_keys->size; i++) {
+                if (store->secret_keys->values[i]) {
+                    OABE_DEREF((OABE_Object *)store->secret_keys->values[i]);
+                }
+            }
             oabe_strmap_free(store->secret_keys);
         }
         if (store->user_keys) {
+            for (size_t i = 0; i < store->user_keys->size; i++) {
+                if (store->user_keys->values[i]) {
+                    OABE_DEREF((OABE_Object *)store->user_keys->values[i]);
+                }
+            }
             oabe_strmap_free(store->user_keys);
         }
         oabe_free(store);
