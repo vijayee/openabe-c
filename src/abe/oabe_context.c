@@ -1105,6 +1105,14 @@ OABE_ERROR oabe_context_cp_encrypt(OABE_ContextCP *ctx, const char *policy,
         }
         oabe_zp_neg(neg_r, r_i);
         OABE_G1 *H_attr_neg_r = oabe_g1_new(ctx->base.group);
+        if (!H_attr_neg_r) {
+            oabe_g1_free(C_i);
+            oabe_zp_free(r_i);
+            oabe_lsss_free_coefficients(shares, share_attrs, num_shares);
+            oabe_zp_free(s);
+            oabe_cp_ct_free(ct);
+            return OABE_ERROR_OUT_OF_MEMORY;
+        }
         oabe_g1_mul_scalar(H_attr_neg_r, H_attr, neg_r);
         oabe_g1_add(C_i, C_i, H_attr_neg_r);
         oabe_g1_free(H_attr_neg_r);

@@ -185,6 +185,11 @@ static OABE_ERROR oabe_bytestring_ensure_capacity(OABE_ByteString *bs, size_t ne
         return OABE_SUCCESS;
     }
 
+    /* Check for overflow (audit L-4: capacity * 2 can wrap on 32-bit). */
+    if (needed > SIZE_MAX / 2) {
+        return OABE_ERROR_OUT_OF_MEMORY;
+    }
+
     size_t new_capacity = bs->capacity * 2;
     if (new_capacity < needed) {
         new_capacity = needed;

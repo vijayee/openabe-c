@@ -77,11 +77,16 @@ void oabe_free(void *ptr) {
 
 void oabe_zeroize(void *ptr, size_t len) {
     if (ptr && len > 0) {
-        /* Use volatile to prevent compiler optimization */
+        /* Use explicit_bzero where available (audit L-5: the volatile loop
+         * can still be elided by some compilers). Fall back to volatile. */
+#if defined(__GLIBC__) && defined(__GLIBC_PREREQ) && __GLIBC_PREREQ(2, 25)
+        explicit_bzero(ptr, len);
+#else
         volatile unsigned char *p = (volatile unsigned char *)ptr;
         while (len--) {
             *p++ = 0;
         }
+#endif
     }
 }
 
@@ -343,13 +348,19 @@ OABE_ERROR oabe_strmap_insert(OABE_StringMap *map, const char *key, void *value)
     /* Grow if needed */
     if (map->size >= map->capacity) {
         size_t new_capacity = map->capacity * 2;
-        char **new_keys = (char **)oabe_realloc(map->keys, new_capacity * sizeof(char *));
-        if (!new_keys) {
-            return OABE_ERROR_OUT_OF_MEMORY;
-        }
+        /* Realloc values first (audit M-10: if keys realloc succeeds but
+         * values fails, the old keys pointer is lost and capacity is stale).
+         * If values fails, keys is untouched — consistent state. */
         void **new_values = (void **)oabe_realloc(map->values, new_capacity * sizeof(void *));
         if (!new_values) {
-            map->keys = new_keys;  /* Rollback not possible, keep old */
+            return OABE_ERROR_OUT_OF_MEMORY;
+        }
+        char **new_keys = (char **)oabe_realloc(map->keys, new_capacity * sizeof(char *));
+        if (!new_keys) {
+            /* Revert values to the old allocation — realloc may have moved
+             * it, but the old data is still valid up to map->size. We keep
+             * new_values since it's at least as large as the old one. */
+            map->values = new_values;
             return OABE_ERROR_OUT_OF_MEMORY;
         }
         map->keys = new_keys;

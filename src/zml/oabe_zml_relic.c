@@ -28,6 +28,7 @@
 #include "openabe/oabe_zml.h"
 #include "openabe/oabe_memory.h"
 #include "openabe/oabe_internal.h"
+#include "openabe/oabe_rng.h"
 
 /* RELIC includes */
 #include <relic.h>
@@ -134,14 +135,27 @@ static void oabe_rng_destroy(void *ptr) {
 }
 
 OABE_ERROR oabe_rng_bytes(OABE_RNGHandle rng, uint8_t *output, size_t len) {
-    (void)rng; /* Unused - RELIC uses its own RNG */
     if (!output || len == 0) {
         return OABE_ERROR_INVALID_INPUT;
     }
 
-    /* Use RELIC's RAND_bytes equivalent - returns void */
-    rand_bytes(output, len);
+    /* If a seeded RNG was provided, use CTR-DRBG for deterministic output
+     * (audit M-3: previously the seed was silently ignored and RELIC's
+     * global rand_bytes was called, breaking test vectors and any code
+     * expecting deterministic derivation). */
+    if (rng) {
+        OABE_RNG_Impl *impl = (OABE_RNG_Impl *)rng;
+        if (impl->initialized) {
+            OABE_CtrDrbg drbg;
+            oabe_ctr_drbg_init(&drbg, impl->seed, sizeof(impl->seed), NULL, 0);
+            OABE_ERROR rc = oabe_ctr_drbg_generate(&drbg, output, len);
+            oabe_zeroize(&drbg, sizeof(drbg));
+            return rc;
+        }
+    }
 
+    /* No seed → use RELIC's CSPRNG */
+    rand_bytes(output, len);
     return OABE_SUCCESS;
 }
 
@@ -337,13 +351,25 @@ OABE_ERROR oabe_zp_set_bytes(OABE_ZP *zp, const uint8_t *data, size_t len) {
 
 OABE_ERROR oabe_zp_random(OABE_ZP *zp, OABE_RNGHandle rng) {
     if (!zp) return OABE_ERROR_INVALID_INPUT;
-    (void)rng; /* Unused - RELIC uses its own RNG */
 
     OABE_ZP_Impl *impl = (OABE_ZP_Impl *)zp;
     OABE_Group_Impl *g = (OABE_Group_Impl *)impl->group;
 
     if (!g) return OABE_ERROR_INVALID_INPUT;
 
+    /* If a seeded RNG is provided, use it for deterministic derivation
+     * (audit M-3: previously the rng argument was silently ignored). */
+    if (rng) {
+        uint8_t buf[32];
+        OABE_ERROR rc = oabe_rng_bytes(rng, buf, sizeof(buf));
+        if (rc != OABE_SUCCESS) return rc;
+        bn_read_bin(impl->value, buf, sizeof(buf));
+        bn_mod(impl->value, impl->value, g->order);
+        oabe_zeroize(buf, sizeof(buf));
+        return OABE_SUCCESS;
+    }
+
+    /* No seeded RNG → use RELIC's CSPRNG */
     bn_rand_mod(impl->value, g->order);
     return OABE_SUCCESS;
 }

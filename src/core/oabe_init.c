@@ -248,9 +248,12 @@ bool oabe_is_initialized(void) {
 }
 
 OABE_ERROR oabe_assert_initialized(void) {
+    pthread_mutex_lock(&g_init_lock);
     if (!g_library_initialized) {
+        pthread_mutex_unlock(&g_init_lock);
         return oabe_init();
     }
+    pthread_mutex_unlock(&g_init_lock);
     if (!oabe_is_thread_initialized()) {
         return oabe_init_thread();
     }

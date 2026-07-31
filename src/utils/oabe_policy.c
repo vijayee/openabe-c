@@ -518,6 +518,15 @@ static OABE_PolicyNode* parse_expression(PolicyParser *p) {
 
         oabe_policy_node_add_child(internal, left);
         oabe_policy_node_add_child(internal, right);
+        /* Check add_child return values (audit M-4: on failure the child
+         * leaks and the tree silently drops a branch). */
+        /* add_child returns void in this implementation, so we can't check
+         * the return — but the realloc inside handles failure by returning
+         * without adding. We verify num_children matches expectations. */
+        if (internal->num_children < 2) {
+            oabe_policy_node_free(internal);
+            return NULL;
+        }
 
         /* Update threshold for OR gate */
         if (type == OABE_POLICY_OR) {
@@ -666,7 +675,9 @@ OABE_AttributeList* oabe_attr_list_from_string(const char *attr_str) {
     while (token) {
         /* Trim whitespace */
         while (isspace((unsigned char)*token)) token++;
-        char *end = token + strlen(token) - 1;
+        size_t tlen = strlen(token);
+        if (tlen == 0) { token = strtok(NULL, ",|"); continue; }
+        char *end = token + tlen - 1;
         while (end > token && isspace((unsigned char)*end)) end--;
         *(end + 1) = '\0';
 
@@ -1553,19 +1564,33 @@ OABE_ERROR oabe_lsss_share_tree(OABE_PolicyNode *policy, OABE_ZP *secret,
     return OABE_SUCCESS;
 }
 
+/* Forward declaration (audit M-7: allocate_sat_lists calls free_sat_lists
+ * for unwinding, but free_sat_lists was declared after it). */
+static void free_sat_lists(OABE_PolicyNode *node);
+
 /**
  * Allocate sat_list for all nodes in the tree.
  */
 static bool allocate_sat_lists(OABE_PolicyNode *node) {
     if (!node) return false;
 
-    /* Allocate sat_list for this node */
+    /* Free any existing sat_list before allocating a new one (audit M-7:
+     * previously calling recovery twice on one tree leaked the old list). */
+    if (node->sat_list) {
+        oabe_free(node->sat_list);
+    }
     node->sat_list = (int *)oabe_calloc(1, sizeof(int));
     if (!node->sat_list) return false;
 
     /* Recursively allocate for children */
     for (size_t i = 0; i < node->num_children; i++) {
         if (!allocate_sat_lists(node->children[i])) {
+            /* Unwind: free sat_lists allocated so far on this path */
+            oabe_free(node->sat_list);
+            node->sat_list = NULL;
+            for (size_t j = 0; j < i; j++) {
+                free_sat_lists(node->children[j]);
+            }
             return false;
         }
     }
@@ -1918,11 +1943,28 @@ OABE_ERROR oabe_function_input_parse(const char *input, OABE_FunctionInput **fun
     /* Skip whitespace */
     while (*p && isspace((unsigned char)*p)) p++;
 
-    /* Check for policy indicators */
-    if (*p == '(' ||
-        strcasestr(input, "AND") != NULL ||
-        strcasestr(input, "OR") != NULL) {
+    /* Check for policy indicators. Match whole-word AND/OR, not substrings
+     * (audit L-6: "endorsement" contains "or" and was misclassified as a
+     * policy). */
+    if (*p == '(') {
         is_policy = true;
+    } else {
+        /* Look for standalone AND or OR tokens (surrounded by whitespace,
+         * parens, or string boundaries). */
+        const char *s = input;
+        while (*s) {
+            if (strncasecmp(s, "AND", 3) == 0 &&
+                (s == input || isspace((unsigned char)s[-1]) || s[-1] == '(') &&
+                (s[3] == '\0' || isspace((unsigned char)s[3]) || s[3] == '(')) {
+                is_policy = true; break;
+            }
+            if (strncasecmp(s, "OR", 2) == 0 &&
+                (s == input || isspace((unsigned char)s[-1]) || s[-1] == '(') &&
+                (s[2] == '\0' || isspace((unsigned char)s[2]) || s[2] == '(')) {
+                is_policy = true; break;
+            }
+            s++;
+        }
     }
 
     OABE_FunctionInput *result = (OABE_FunctionInput *)oabe_malloc(sizeof(OABE_FunctionInput));
@@ -2180,4 +2222,15 @@ bool oabe_policy_satisfies(const OABE_PolicyTree *tree, const OABE_StringVector 
 bool oabe_policy_satisfies_list(const OABE_PolicyTree *tree, const OABE_AttributeList *attrs) {
     if (!tree || !attrs) return false;
     return oabe_policy_satisfies(tree, attrs->attributes);
+}
+/* Public wrappers for functions declared in the header but previously only
+ * static (audit M-8: link errors for external callers). */
+OABE_ERROR oabe_evaluate_polynomial(OABE_GroupHandle group, OABE_ZP **coefficients,
+                                      size_t num_coeff, int x, OABE_ZP **result) {
+    return evaluate_polynomial(group, coefficients, num_coeff, x, result);
+}
+
+OABE_ERROR oabe_compute_lagrange(OABE_GroupHandle group, int index, int *indices,
+                                   size_t num_indices, OABE_ZP **result) {
+    return compute_lagrange(group, index, indices, num_indices, result);
 }

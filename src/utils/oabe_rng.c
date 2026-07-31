@@ -340,6 +340,10 @@ OABE_ERROR oabe_rng_bytestring(OABE_RNGCtx *rng, OABE_ByteString *output, size_t
         return OABE_ERROR_INVALID_INPUT;
     }
 
+    /* Clear the output before appending (audit M-5: previously stale prefix
+     * data remained before the new random bytes). */
+    oabe_bytestring_clear(output);
+
     uint8_t *buffer = (uint8_t *)oabe_malloc(output_len);
     if (!buffer) {
         return OABE_ERROR_OUT_OF_MEMORY;
