@@ -94,28 +94,33 @@ cleanup:
 }
 
 #else
-/* RELIC version - simplified using AES if available, or hash-based */
+/* RELIC version - use OpenSSL EVP for AES-256-CTR (audit C-7: the prior XOR
+ * fallback was a trivially recoverable cipher — given any output and knowing
+ * the counter increments, the 32-byte key is directly recoverable, making all
+ * past/future DRBG output predictable). */
+#include <openssl/evp.h>
 static OABE_ERROR oabe_aes256_ctr_encrypt(const uint8_t *key, const uint8_t *counter,
                                            uint8_t *output, size_t output_len) {
-    /* For RELIC, we use a simple XOR-based PRF approach */
-    /* This is a simplified implementation - production code should use proper AES-CTR */
-    uint8_t counter_copy[OABE_CTR_DRBG_BLOCKSIZE];
-    memcpy(counter_copy, counter, OABE_CTR_DRBG_BLOCKSIZE);
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return OABE_ERROR_OUT_OF_MEMORY;
 
-    size_t offset = 0;
-    while (offset < output_len) {
-        /* XOR key with counter to produce keystream byte */
-        for (size_t i = 0; i < OABE_CTR_DRBG_BLOCKSIZE && offset + i < output_len; i++) {
-            output[offset + i] = key[i % OABE_CTR_DRBG_KEYSIZE_BYTES] ^ counter_copy[i];
-        }
-        /* Increment counter */
-        for (int i = OABE_CTR_DRBG_BLOCKSIZE - 1; i >= 0; i--) {
-            if (++counter_copy[i] != 0) break;
-        }
-        offset += OABE_CTR_DRBG_BLOCKSIZE;
-    }
-
-    return OABE_SUCCESS;
+    OABE_ERROR rc = OABE_ERROR_ENCRYPTION_ERROR;
+    int outl = 0;
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, key, counter) != 1) goto done;
+    if (EVP_EncryptUpdate(ctx, output, &outl, NULL, 0) != 1) goto done; /* set IV */
+    /* AES-CTR is a stream cipher — encrypting zeros gives the keystream,
+     * but we actually want to encrypt the *input* (which is the all-zero
+     * V buffer in CTR-DRBG). Since EVP_CTR XORs the keystream with the
+     * plaintext, encrypting zeros produces the keystream directly. */
+    memset(output, 0, output_len);
+    outl = 0;
+    if (EVP_EncryptUpdate(ctx, output, &outl, output, (int)output_len) != 1) goto done;
+    int finall = 0;
+    if (EVP_EncryptFinal_ex(ctx, output + outl, &finall) != 1) goto done;
+    rc = OABE_SUCCESS;
+done:
+    EVP_CIPHER_CTX_free(ctx);
+    return rc;
 }
 #endif
 
@@ -210,7 +215,14 @@ OABE_ERROR oabe_ctr_drbg_generate(OABE_CtrDrbg *ctx, uint8_t *output, size_t out
 
     /* Check if reseed is needed */
     if (ctx->reseed_counter >= ctx->reseed_interval) {
-        /* In production, should reseed from entropy source */
+        /* Reseed from entropy source (audit C-8: previously just reset the
+         * counter without pulling fresh entropy). */
+        uint8_t entropy[OABE_CTR_DRBG_KEYSIZE_BYTES + OABE_CTR_DRBG_BLOCKSIZE];
+        if (RAND_bytes(entropy, sizeof(entropy)) != 1) {
+            return OABE_ERROR_INVALID_RNG;
+        }
+        oabe_ctr_drbg_update(ctx, entropy, sizeof(entropy));
+        oabe_zeroize(entropy, sizeof(entropy));
         ctx->reseed_counter = 0;
     }
 
@@ -220,9 +232,15 @@ OABE_ERROR oabe_ctr_drbg_generate(OABE_CtrDrbg *ctx, uint8_t *output, size_t out
         return rc;
     }
 
-    /* Increment counter for next call */
-    for (int i = OABE_CTR_DRBG_BLOCKSIZE - 1; i >= 0; i--) {
-        if (++ctx->counter[i] != 0) break;
+    /* Advance the counter by the number of blocks consumed (audit C-8:
+     * previously incremented by only 1 block regardless of output_len,
+     * so the next generate() call reused already-emitted keystream blocks
+     * — overlapping keystream is fatal for a CSPRNG). */
+    size_t blocks = (output_len + OABE_CTR_DRBG_BLOCKSIZE - 1) / OABE_CTR_DRBG_BLOCKSIZE;
+    for (size_t b = 0; b < blocks; b++) {
+        for (int i = OABE_CTR_DRBG_BLOCKSIZE - 1; i >= 0; i--) {
+            if (++ctx->counter[i] != 0) break;
+        }
     }
 
     ctx->reseed_counter++;
