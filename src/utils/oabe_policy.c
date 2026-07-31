@@ -381,6 +381,16 @@ static OABE_PolicyNode* parse_threshold_list(PolicyParser *p) {
             oabe_free(children);
             return NULL;
         }
+        /* Validate threshold (audit H-6: k <= 0 or k > num_children causes
+         * memory-exhaustion DoS via uint32 cast, or silently produces
+         * undecryptable ciphertext). */
+        if (k < 1 || (size_t)k > num_children) {
+            for (size_t i = 0; i < num_children; i++) {
+                oabe_policy_node_free(children[i]);
+            }
+            oabe_free(children);
+            return NULL;
+        }
         next_token(p);
 
         /* Create threshold node */

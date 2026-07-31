@@ -84,8 +84,19 @@ OABE_ERROR oabe_aes_ct_serialize(const OABE_AES_Ciphertext *ct, OABE_ByteString 
         return OABE_ERROR_OUT_OF_MEMORY;
     }
 
+    /* Write scheme byte first so oabe_ct_deserialize can dispatch correctly
+     * (audit H-2: without this, the first byte was iv_len (typically 12),
+     * which doesn't match any scheme, so AES ciphertexts were mis-parsed as
+     * KP-ABE). */
+    OABE_ERROR rc = oabe_bytestring_pack8(*result, (uint8_t)OABE_SCHEME_AES_GCM);
+    if (rc != OABE_SUCCESS) {
+        oabe_bytestring_free(*result);
+        *result = NULL;
+        return rc;
+    }
+
     /* Write IV length and IV */
-    OABE_ERROR rc = oabe_bytestring_pack8(*result, (uint8_t)ct->iv_len);
+    rc = oabe_bytestring_pack8(*result, (uint8_t)ct->iv_len);
     if (rc != OABE_SUCCESS) {
         oabe_bytestring_free(*result);
         *result = NULL;
@@ -127,7 +138,9 @@ OABE_ERROR oabe_aes_ct_deserialize(const OABE_ByteString *input, OABE_AES_Cipher
         return OABE_ERROR_INVALID_INPUT;
     }
 
-    size_t index = 0;
+    /* Skip the scheme byte that oabe_ct_deserialize already peeked at
+     * (audit H-2: the serialize now prepends OABE_SCHEME_AES_GCM). */
+    size_t index = 1;
 
     *ct = oabe_aes_ct_new();
     if (!*ct) {

@@ -700,6 +700,15 @@ OABE_ERROR oabe_g1_deserialize(OABE_GroupHandle group, const OABE_ByteString *in
     const uint8_t *data = oabe_bytestring_get_const_ptr(input) + index;
     g1_read_bin(impl->point, data, len);
 
+    /* Validate the deserialized point (audit H-1: without this, an attacker
+     * can inject invalid-curve or identity points that enable small-subgroup
+     * and invalid-point attacks). */
+    if (ep_is_infty(impl->point) || !ep_on_curve(impl->point)) {
+        oabe_g1_free(*g1);
+        *g1 = NULL;
+        return OABE_ERROR_DESERIALIZATION_FAILED;
+    }
+
     return OABE_SUCCESS;
 }
 
@@ -883,6 +892,13 @@ OABE_ERROR oabe_g2_deserialize(OABE_GroupHandle group, const OABE_ByteString *in
     OABE_G2_Impl *impl = (OABE_G2_Impl *)*g2;
     const uint8_t *data = oabe_bytestring_get_const_ptr(input) + index;
     g2_read_bin(impl->point, data, len);
+
+    /* Validate the deserialized point (audit H-1). */
+    if (ep2_is_infty(impl->point) || !ep2_on_curve(impl->point)) {
+        oabe_g2_free(*g2);
+        *g2 = NULL;
+        return OABE_ERROR_DESERIALIZATION_FAILED;
+    }
 
     return OABE_SUCCESS;
 }
