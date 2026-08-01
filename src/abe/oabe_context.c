@@ -315,8 +315,17 @@ OABE_ERROR oabe_context_aes_encrypt(OABE_ContextAES *ctx,
         return OABE_ERROR_INVALID_KEY;
     }
 
-    /* Generate IV if not provided */
-    uint8_t generated_iv[16];
+    /* Audit H-D: this was a XOR placeholder with a random dummy tag — no
+     * confidentiality and no integrity. Replaced with real AES-256-GCM. The
+     * key MUST be 32 bytes (AES-256); reject otherwise. A fresh 96-bit IV is
+     * generated per encryption and packed into the ciphertext; the 16-byte
+     * authentication tag is returned via the `tag` parameter. */
+    if (ctx->key->key_len != 32) {
+        return OABE_ERROR_INVALID_KEY;
+    }
+
+    /* Generate IV if not provided (96-bit GCM IV). */
+    uint8_t generated_iv[12];
     if (!iv) {
         if (oabe_rng_bytes(ctx->base.rng, generated_iv, 12) != OABE_SUCCESS) {
             return OABE_ERROR_INVALID_RNG;
@@ -324,8 +333,11 @@ OABE_ERROR oabe_context_aes_encrypt(OABE_ContextAES *ctx,
         iv = generated_iv;
         iv_len = 12;
     }
+    if (iv_len != 12) {
+        return OABE_ERROR_INVALID_INPUT; /* GCM standard IV is 96 bits */
+    }
 
-    /* Store IV for decryption */
+    /* Store IV for decryption (kept for API compatibility). */
     if (ctx->iv) {
         oabe_free(ctx->iv);
     }
@@ -336,42 +348,48 @@ OABE_ERROR oabe_context_aes_encrypt(OABE_ContextAES *ctx,
     memcpy(ctx->iv, iv, iv_len);
     ctx->iv_len = iv_len;
 
-    /* Create output ByteString */
+    /* Real AES-256-GCM encryption. */
+    EVP_CIPHER_CTX *evp = EVP_CIPHER_CTX_new();
+    if (!evp) {
+        return OABE_ERROR_OUT_OF_MEMORY;
+    }
+    OABE_ERROR rc = OABE_ERROR_ENCRYPTION_ERROR;
+    uint8_t *ct = (uint8_t *)oabe_malloc(plaintext_len + 16);
+    if (!ct) {
+        EVP_CIPHER_CTX_free(evp);
+        return OABE_ERROR_OUT_OF_MEMORY;
+    }
+    int outl = 0, finall = 0;
+    if (EVP_EncryptInit_ex(evp, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
+        EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+        EVP_EncryptInit_ex(evp, NULL, NULL, ctx->key->key_bytes, iv) != 1) {
+        goto enc_done;
+    }
+    if (EVP_EncryptUpdate(evp, ct, &outl, plaintext, (int)plaintext_len) != 1) goto enc_done;
+    if (EVP_EncryptFinal_ex(evp, ct + outl, &finall) != 1) goto enc_done;
+    if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_GCM_GET_TAG, 16, tag) != 1) goto enc_done;
+
+    /* Pack IV + length + ciphertext into the output ByteString. */
     *ciphertext = oabe_bytestring_new();
     if (!*ciphertext) {
-        return OABE_ERROR_OUT_OF_MEMORY;
+        rc = OABE_ERROR_OUT_OF_MEMORY;
+        goto enc_done;
     }
-
-    /* For now, use simple XOR encryption (placeholder - production should use AES-GCM) */
-    /* In production, use OpenSSL EVP_aes_*_gcm() or similar */
-
-    /* Pack IV */
     oabe_bytestring_pack8(*ciphertext, (uint8_t)iv_len);
     oabe_bytestring_append_data(*ciphertext, iv, iv_len);
-
-    /* Pack ciphertext (simple XOR for now) */
     oabe_bytestring_pack32(*ciphertext, (uint32_t)plaintext_len);
+    oabe_bytestring_append_data(*ciphertext, ct, (size_t)outl + (size_t)finall);
+    rc = OABE_SUCCESS;
 
-    uint8_t *encrypted = (uint8_t *)oabe_malloc(plaintext_len);
-    if (!encrypted) {
+enc_done:
+    if (rc != OABE_SUCCESS && *ciphertext) {
         oabe_bytestring_free(*ciphertext);
         *ciphertext = NULL;
-        return OABE_ERROR_OUT_OF_MEMORY;
     }
-
-    for (size_t i = 0; i < plaintext_len; i++) {
-        encrypted[i] = plaintext[i] ^ ctx->key->key_bytes[i % ctx->key->key_len];
-    }
-
-    oabe_bytestring_append_data(*ciphertext, encrypted, plaintext_len);
-    oabe_zeroize(encrypted, plaintext_len);
-    oabe_free(encrypted);
-
-    /* Generate dummy tag */
-    memset(tag, 0, 16);
-    oabe_rng_bytes(ctx->base.rng, tag, 16);
-
-    return OABE_SUCCESS;
+    oabe_zeroize(ct, plaintext_len + 16);
+    oabe_free(ct);
+    EVP_CIPHER_CTX_free(evp);
+    return rc;
 }
 
 OABE_ERROR oabe_context_aes_decrypt(OABE_ContextAES *ctx,
@@ -379,23 +397,24 @@ OABE_ERROR oabe_context_aes_decrypt(OABE_ContextAES *ctx,
                                       const uint8_t *iv, size_t iv_len,
                                       const uint8_t tag[16],
                                       uint8_t *plaintext, size_t *plaintext_len) {
-    (void)iv;        /* IV comes from ciphertext in our format */
+    /* Audit H-D: IV and tag are carried via the ciphertext format and the
+     * `tag` parameter respectively. The passed iv/iv_len are not used (the
+     * IV is parsed from the ciphertext). */
+    (void)iv;
     (void)iv_len;
-    (void)tag;       /* Tag comes from ciphertext in our format */
 
-    if (!ctx || !ciphertext || !plaintext || !plaintext_len) {
+    if (!ctx || !ciphertext || !plaintext || !plaintext_len || !tag) {
         return OABE_ERROR_INVALID_INPUT;
     }
 
     if (!ctx->key) {
         return OABE_ERROR_INVALID_KEY;
     }
+    if (ctx->key->key_len != 32) {
+        return OABE_ERROR_INVALID_KEY;
+    }
 
-    /* Parse ciphertext */
-    size_t index = 0;
-    uint8_t stored_iv_len;
-    uint32_t stored_plaintext_len;
-
+    /* Parse: iv_len(1) + iv + plaintext_len(4) + ciphertext bytes. */
     if (ciphertext_len < 5) {
         return OABE_ERROR_INVALID_CIPHERTEXT;
     }
@@ -405,13 +424,16 @@ OABE_ERROR oabe_context_aes_decrypt(OABE_ContextAES *ctx,
         return OABE_ERROR_OUT_OF_MEMORY;
     }
 
+    size_t index = 0;
+    uint8_t stored_iv_len;
+    uint32_t stored_plaintext_len;
     oabe_bytestring_unpack8(bs, &index, &stored_iv_len);
-    if (stored_iv_len != iv_len) {
+    if (stored_iv_len != 12) {
         oabe_bytestring_free(bs);
         return OABE_ERROR_INVALID_CIPHERTEXT;
     }
-
-    index += stored_iv_len;  /* Skip IV */
+    const uint8_t *stored_iv = ciphertext + index;
+    index += stored_iv_len;
 
     oabe_bytestring_unpack32(bs, &index, &stored_plaintext_len);
 
@@ -420,16 +442,38 @@ OABE_ERROR oabe_context_aes_decrypt(OABE_ContextAES *ctx,
         return OABE_ERROR_BUFFER_TOO_SMALL;
     }
 
-    *plaintext_len = stored_plaintext_len;
-
-    /* Decrypt (simple XOR for now) */
     const uint8_t *encrypted = ciphertext + index;
-    for (size_t i = 0; i < *plaintext_len; i++) {
-        plaintext[i] = encrypted[i] ^ ctx->key->key_bytes[i % ctx->key->key_len];
+    size_t encrypted_len = ciphertext_len - index;
+    if (encrypted_len != stored_plaintext_len) {
+        oabe_bytestring_free(bs);
+        return OABE_ERROR_INVALID_CIPHERTEXT;
     }
 
+    /* Real AES-256-GCM decryption; EVP_DecryptFinal_ex fails (returns 0) if
+     * the authentication tag does not verify — i.e. ciphertext or tag was
+     * tampered with. */
+    EVP_CIPHER_CTX *evp = EVP_CIPHER_CTX_new();
+    OABE_ERROR rc = OABE_ERROR_DECRYPTION_FAILED;
+    if (!evp) {
+        oabe_bytestring_free(bs);
+        return OABE_ERROR_OUT_OF_MEMORY;
+    }
+    int outl = 0, finall = 0;
+    if (EVP_DecryptInit_ex(evp, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
+        EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+        EVP_DecryptInit_ex(evp, NULL, NULL, ctx->key->key_bytes, stored_iv) != 1) {
+        goto dec_done;
+    }
+    if (EVP_DecryptUpdate(evp, plaintext, &outl, encrypted, (int)encrypted_len) != 1) goto dec_done;
+    if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_GCM_SET_TAG, 16, (void *)tag) != 1) goto dec_done;
+    if (EVP_DecryptFinal_ex(evp, plaintext + outl, &finall) != 1) goto dec_done;
+    *plaintext_len = (size_t)outl + (size_t)finall;
+    rc = OABE_SUCCESS;
+
+dec_done:
+    EVP_CIPHER_CTX_free(evp);
     oabe_bytestring_free(bs);
-    return OABE_SUCCESS;
+    return rc;
 }
 
 /*============================================================================
