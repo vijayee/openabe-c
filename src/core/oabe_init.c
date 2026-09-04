@@ -39,7 +39,8 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/err.h>
-#elif defined(WITH_RELIC)
+#endif
+#if defined(WITH_RELIC)
 #include <relic.h>
 #endif
 
@@ -137,7 +138,8 @@ OABE_ERROR oabe_init(void) {
     }
 
     g_using_openssl = true;
-#elif defined(WITH_RELIC)
+#endif
+#if defined(WITH_RELIC)
     /* Initialize RELIC */
     core_init();
     if (core_get()->code != RLC_OK) {
@@ -181,7 +183,8 @@ OABE_ERROR oabe_init_without_openssl(void) {
 #if defined(BP_WITH_OPENSSL)
     /* OpenSSL-only build - RELIC not available */
     return OABE_ERROR_LIBRARY_NOT_INITIALIZED;
-#elif defined(WITH_RELIC)
+#endif
+#if defined(WITH_RELIC)
     /* Always use RELIC backend */
     if (g_library_initialized) {
         return OABE_SUCCESS;
@@ -232,7 +235,8 @@ OABE_ERROR oabe_shutdown(void) {
 #if defined(BP_WITH_OPENSSL)
     EVP_cleanup();
     ERR_free_strings();
-#elif defined(WITH_RELIC)
+#endif
+#if defined(WITH_RELIC)
     pc_core_clean();
     core_clean();
 #endif

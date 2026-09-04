@@ -37,7 +37,8 @@
 #include <openssl/rand.h>
 #include <openssl/aes.h>
 #include <openssl/evp.h>
-#elif defined(WITH_RELIC)
+#endif
+#if defined(WITH_RELIC)
 #include <relic.h>
 #endif
 
