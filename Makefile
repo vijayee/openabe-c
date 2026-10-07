@@ -195,7 +195,7 @@ install: $(STATIC_LIB) $(SHARED_LIB)
 # Run tests
 .PHONY: test
 test: tests
-	@for test in $(BUILDDIR)/tests/*; do \
+	@for test in $(TEST_BINS); do \
 		echo "Running $$test..."; \
 		$$test || exit 1; \
 	done
