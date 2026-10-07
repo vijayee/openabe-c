@@ -928,6 +928,14 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESec
     rc = oabe_bytestring_unpack32(input, &index, &alpha_len);
     if (rc != OABE_SUCCESS) goto error;
 
+    /* Bounds-check every length prefix before copying: these fields come
+       from attacker-influenced blobs and an unchecked length over-reads the
+       heap by up to 4 GiB. */
+    if (index + alpha_len > oabe_bytestring_get_size(input)) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
+
     if (alpha_len > 0) {
         OABE_ByteString *alpha_data = oabe_bytestring_new_from_data(
             oabe_bytestring_get_const_ptr(input) + index, alpha_len);
@@ -946,6 +954,11 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESec
     rc = oabe_bytestring_unpack32(input, &index, &beta_len);
     if (rc != OABE_SUCCESS) goto error;
 
+    if (index + beta_len > oabe_bytestring_get_size(input)) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
+
     if (beta_len > 0) {
         OABE_ByteString *beta_data = oabe_bytestring_new_from_data(
             oabe_bytestring_get_const_ptr(input) + index, beta_len);
@@ -962,6 +975,11 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESec
     rc = oabe_bytestring_unpack32(input, &index, &id_len);
     if (rc != OABE_SUCCESS) goto error;
 
+    if (index + id_len > oabe_bytestring_get_size(input)) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
+
     if (id_len > 0) {
         k->base.key_id = (char *)oabe_malloc(id_len + 1);
         if (!k->base.key_id) {
@@ -977,6 +995,11 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESec
     uint32_t key_data_len;
     rc = oabe_bytestring_unpack32(input, &index, &key_data_len);
     if (rc != OABE_SUCCESS) goto error;
+
+    if (index + key_data_len > oabe_bytestring_get_size(input)) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
 
     if (key_data_len > 0) {
         k->base.key_data = oabe_bytestring_new_from_data(
@@ -1186,6 +1209,13 @@ OABE_ERROR oabe_user_key_deserialize(const OABE_ByteString *input, OABE_ABEUserK
     rc = oabe_bytestring_unpack32(input, &index, &id_len);
     if (rc != OABE_SUCCESS) goto error;
 
+    /* Bounds-check every length prefix before copying (attacker-influenced
+       blobs; an unchecked length over-reads the heap). */
+    if (index + id_len > oabe_bytestring_get_size(input)) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
+
     if (id_len > 0) {
         k->base.key_id = (char *)oabe_malloc(id_len + 1);
         if (!k->base.key_id) {
@@ -1214,6 +1244,11 @@ OABE_ERROR oabe_user_key_deserialize(const OABE_ByteString *input, OABE_ABEUserK
             rc = oabe_bytestring_unpack32(input, &index, &attr_len);
             if (rc != OABE_SUCCESS) goto error;
 
+            if (index + attr_len > oabe_bytestring_get_size(input)) {
+                rc = OABE_ERROR_INVALID_KEY;
+                goto error;
+            }
+
             if (attr_len > 0) {
                 char *attr = (char *)oabe_malloc(attr_len + 1);
                 if (!attr) {
@@ -1235,6 +1270,11 @@ OABE_ERROR oabe_user_key_deserialize(const OABE_ByteString *input, OABE_ABEUserK
     uint32_t policy_len;
     rc = oabe_bytestring_unpack32(input, &index, &policy_len);
     if (rc != OABE_SUCCESS) goto error;
+
+    if (index + policy_len > oabe_bytestring_get_size(input)) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
 
     if (policy_len > 0) {
         /* Policy is stored as a StringVector with one element */
@@ -1262,6 +1302,11 @@ OABE_ERROR oabe_user_key_deserialize(const OABE_ByteString *input, OABE_ABEUserK
     uint32_t key_data_len;
     rc = oabe_bytestring_unpack32(input, &index, &key_data_len);
     if (rc != OABE_SUCCESS) goto error;
+
+    if (index + key_data_len > oabe_bytestring_get_size(input)) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
 
     if (key_data_len > 0) {
         k->base.key_data = oabe_bytestring_new_from_data(

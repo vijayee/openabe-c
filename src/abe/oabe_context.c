@@ -193,6 +193,14 @@ static OABE_ERROR deserialize_cp_key_elements(OABE_GroupHandle group, const OABE
             return rc;
         }
 
+        /* elem_len comes from attacker-influenced key bytes — an unchecked
+           length over-reads the heap by up to 4 GiB. */
+        if (index + elem_len > oabe_bytestring_get_size(data)) {
+            oabe_vector_free(*elements);
+            *elements = NULL;
+            return OABE_ERROR_INVALID_KEY;
+        }
+
         if (elem_len == 0) {
             continue;
         }

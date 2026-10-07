@@ -468,6 +468,10 @@ OABE_ERROR oabe_cp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
 
     if (policy_len > 0) {
         if (index + policy_len > oabe_bytestring_get_size(input)) {
+            /* Must set rc before goto error: the error label frees *ct and
+               returns rc, so a stale OABE_SUCCESS here makes the caller
+               dereference a NULL ciphertext. */
+            rc = OABE_ERROR_INVALID_CIPHERTEXT;
             goto error;
         }
         (*ct)->policy_string = (char *)oabe_malloc(policy_len + 1);
@@ -518,6 +522,7 @@ OABE_ERROR oabe_cp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
         goto error;
     }
     if (num_components > 4096) {
+        rc = OABE_ERROR_INVALID_CIPHERTEXT;
         goto error;
     }
 
@@ -539,6 +544,7 @@ OABE_ERROR oabe_cp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
             goto error;
         }
         if (attr_len > 4096 || index + attr_len > oabe_bytestring_get_size(input)) {
+            rc = OABE_ERROR_INVALID_CIPHERTEXT;
             goto error;
         }
 
@@ -811,6 +817,7 @@ OABE_ERROR oabe_kp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
         goto error;
     }
     if (num_attrs > 4096) {
+        rc = OABE_ERROR_INVALID_CIPHERTEXT;
         goto error;
     }
 
@@ -843,6 +850,7 @@ OABE_ERROR oabe_kp_ct_deserialize(OABE_GroupHandle group, const OABE_ByteString 
             goto error;
         }
         if (attr_len > 4096 || index + attr_len > oabe_bytestring_get_size(input)) {
+            rc = OABE_ERROR_INVALID_CIPHERTEXT;
             goto error;
         }
 
