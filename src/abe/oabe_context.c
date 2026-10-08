@@ -731,6 +731,12 @@ OABE_ERROR oabe_context_cp_keygen(OABE_ContextCP *ctx, const char *key_id, const
         return OABE_ERROR_LIBRARY_NOT_INITIALIZED;
     }
 
+    /* Defensive second layer (audit 11 A11-3): never mint a key from NULL
+       master scalars, whatever restore path produced this secret key. */
+    if (!ctx->secret_key->alpha || !ctx->secret_key->beta) {
+        return OABE_ERROR_INVALID_KEY;
+    }
+
     /* Parse attributes */
     OABE_AttributeList *attr_list = oabe_attr_list_from_string(attributes);
     if (!attr_list) {

@@ -991,13 +991,22 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_GroupH
 
     /* Bounds-check every length prefix before copying: these fields come
        from attacker-influenced blobs and an unchecked length over-reads the
-       heap by up to 4 GiB. */
-    if (index + alpha_len > oabe_bytestring_get_size(input)) {
+       heap by up to 4 GiB. Subtraction form (index <= size is guaranteed by
+       the bounded unpack8/unpack32 reads above). */
+    if ((size_t)alpha_len > oabe_bytestring_get_size(input) - index) {
         rc = OABE_ERROR_INVALID_KEY;
         goto error;
     }
 
-    if (alpha_len > 0) {
+    /* Fail closed on a zero-length master scalar: accepting it would return
+       SUCCESS with k->alpha == NULL, and downstream keygen would silently
+       mint degenerate keys (audit 11 A11-3). */
+    if (alpha_len == 0) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
+
+    {
         OABE_ByteString *alpha_data = oabe_bytestring_new_from_data(
             oabe_bytestring_get_const_ptr(input) + index, alpha_len);
         if (!alpha_data) {
@@ -1015,12 +1024,18 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_GroupH
     rc = oabe_bytestring_unpack32(input, &index, &beta_len);
     if (rc != OABE_SUCCESS) goto error;
 
-    if (index + beta_len > oabe_bytestring_get_size(input)) {
+    if ((size_t)beta_len > oabe_bytestring_get_size(input) - index) {
         rc = OABE_ERROR_INVALID_KEY;
         goto error;
     }
 
-    if (beta_len > 0) {
+    /* Same fail-closed rule as alpha (audit 11 A11-3). */
+    if (beta_len == 0) {
+        rc = OABE_ERROR_INVALID_KEY;
+        goto error;
+    }
+
+    {
         OABE_ByteString *beta_data = oabe_bytestring_new_from_data(
             oabe_bytestring_get_const_ptr(input) + index, beta_len);
         if (!beta_data) {
