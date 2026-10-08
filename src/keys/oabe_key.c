@@ -590,10 +590,23 @@ OABE_ERROR oabe_params_deserialize(const OABE_ByteString *input, OABE_ABEParams 
     p->base.scheme = (OABE_Scheme)scheme_byte;
     p->group = group;
 
+    /* Bounds-check every length prefix before copying: these fields come
+       from attacker-influenced blobs (reachable via
+       oabe_context_cp_set_public_params) and an unchecked length over-reads
+       the heap by up to 4 GiB (audit 11 A11-1). Subtraction form: index is
+       always <= size here because unpack8/unpack32 bounds-check their own
+       reads, so size - index cannot underflow. */
+    const size_t input_size = oabe_bytestring_get_size(input);
+
     /* Read g1_generator */
     uint32_t g1_len;
     rc = oabe_bytestring_unpack32(input, &index, &g1_len);
     if (rc != OABE_SUCCESS) goto error;
+
+    if ((size_t)g1_len > input_size - index) {
+        rc = OABE_ERROR_DESERIALIZATION_FAILED;
+        goto error;
+    }
 
     if (g1_len > 0) {
         OABE_ByteString *g1_data = oabe_bytestring_new_from_data(
@@ -613,6 +626,11 @@ OABE_ERROR oabe_params_deserialize(const OABE_ByteString *input, OABE_ABEParams 
     rc = oabe_bytestring_unpack32(input, &index, &g2_len);
     if (rc != OABE_SUCCESS) goto error;
 
+    if ((size_t)g2_len > input_size - index) {
+        rc = OABE_ERROR_DESERIALIZATION_FAILED;
+        goto error;
+    }
+
     if (g2_len > 0) {
         OABE_ByteString *g2_data = oabe_bytestring_new_from_data(
             oabe_bytestring_get_const_ptr(input) + index, g2_len);
@@ -630,6 +648,11 @@ OABE_ERROR oabe_params_deserialize(const OABE_ByteString *input, OABE_ABEParams 
     uint32_t gt_len;
     rc = oabe_bytestring_unpack32(input, &index, &gt_len);
     if (rc != OABE_SUCCESS) goto error;
+
+    if ((size_t)gt_len > input_size - index) {
+        rc = OABE_ERROR_DESERIALIZATION_FAILED;
+        goto error;
+    }
 
     if (gt_len > 0) {
         OABE_ByteString *gt_data = oabe_bytestring_new_from_data(
@@ -649,6 +672,11 @@ OABE_ERROR oabe_params_deserialize(const OABE_ByteString *input, OABE_ABEParams 
     rc = oabe_bytestring_unpack32(input, &index, &g1_alpha_len);
     if (rc != OABE_SUCCESS) goto error;
 
+    if ((size_t)g1_alpha_len > input_size - index) {
+        rc = OABE_ERROR_DESERIALIZATION_FAILED;
+        goto error;
+    }
+
     if (g1_alpha_len > 0) {
         OABE_ByteString *g1_alpha_data = oabe_bytestring_new_from_data(
             oabe_bytestring_get_const_ptr(input) + index, g1_alpha_len);
@@ -666,6 +694,11 @@ OABE_ERROR oabe_params_deserialize(const OABE_ByteString *input, OABE_ABEParams 
     uint32_t egg_alpha_len;
     rc = oabe_bytestring_unpack32(input, &index, &egg_alpha_len);
     if (rc != OABE_SUCCESS) goto error;
+
+    if ((size_t)egg_alpha_len > input_size - index) {
+        rc = OABE_ERROR_DESERIALIZATION_FAILED;
+        goto error;
+    }
 
     if (egg_alpha_len > 0) {
         OABE_ByteString *egg_alpha_data = oabe_bytestring_new_from_data(
@@ -685,6 +718,11 @@ OABE_ERROR oabe_params_deserialize(const OABE_ByteString *input, OABE_ABEParams 
     rc = oabe_bytestring_unpack32(input, &index, &g1_a_len);
     if (rc != OABE_SUCCESS) goto error;
 
+    if ((size_t)g1_a_len > input_size - index) {
+        rc = OABE_ERROR_DESERIALIZATION_FAILED;
+        goto error;
+    }
+
     if (g1_a_len > 0) {
         OABE_ByteString *g1_a_data = oabe_bytestring_new_from_data(
             oabe_bytestring_get_const_ptr(input) + index, g1_a_len);
@@ -703,6 +741,11 @@ OABE_ERROR oabe_params_deserialize(const OABE_ByteString *input, OABE_ABEParams 
     rc = oabe_bytestring_unpack32(input, &index, &g2_a_len);
     if (rc != OABE_SUCCESS) goto error;
 
+    if ((size_t)g2_a_len > input_size - index) {
+        rc = OABE_ERROR_DESERIALIZATION_FAILED;
+        goto error;
+    }
+
     if (g2_a_len > 0) {
         OABE_ByteString *g2_a_data = oabe_bytestring_new_from_data(
             oabe_bytestring_get_const_ptr(input) + index, g2_a_len);
@@ -720,6 +763,11 @@ OABE_ERROR oabe_params_deserialize(const OABE_ByteString *input, OABE_ABEParams 
     uint32_t key_data_len;
     rc = oabe_bytestring_unpack32(input, &index, &key_data_len);
     if (rc != OABE_SUCCESS) goto error;
+
+    if ((size_t)key_data_len > input_size - index) {
+        rc = OABE_ERROR_DESERIALIZATION_FAILED;
+        goto error;
+    }
 
     if (key_data_len > 0) {
         p->base.key_data = oabe_bytestring_new_from_data(
