@@ -48,13 +48,31 @@
  * (via Lagrange interpolation) and decrypt the message. The AES blob
  * (IV(12) + tag(16) + ciphertext) is carried in ct->encrypted_key, which the
  * existing serializer/deserializer already round-trips. */
+static const uint8_t _DEM_KDF_LABEL[] = "CRABS-OPENABE-DEM-V2";
+
 static OABE_ERROR _dem_derive_symkey(const OABE_GT *gt, uint8_t key[32]) {
   OABE_ByteString *bs = NULL;
   OABE_ERROR rc = oabe_gt_serialize(gt, &bs);
   if (rc != OABE_SUCCESS || !bs) return rc;
-  SHA256(oabe_bytestring_get_const_ptr(bs), oabe_bytestring_get_size(bs), key);
+  /* Domain separation (A10-L15): bind the DEM KDF to this scheme so the
+     same GT serialization can never be reused as key material by another
+     consumer. BREAKING: ciphertexts written before this change no longer
+     decrypt (accepted pre-release). */
+  EVP_MD_CTX *md = EVP_MD_CTX_new();
+  OABE_ERROR result = OABE_ERROR_OUT_OF_MEMORY;
+  unsigned int hash_len = 0;
+  if (md) {
+    if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
+        EVP_DigestUpdate(md, _DEM_KDF_LABEL, sizeof(_DEM_KDF_LABEL) - 1) == 1 &&
+        EVP_DigestUpdate(md, oabe_bytestring_get_const_ptr(bs),
+                         oabe_bytestring_get_size(bs)) == 1 &&
+        EVP_DigestFinal_ex(md, key, &hash_len) == 1 && hash_len == 32) {
+      result = OABE_SUCCESS;
+    }
+    EVP_MD_CTX_free(md);
+  }
   oabe_bytestring_free(bs);
-  return OABE_SUCCESS;
+  return result;
 }
 
 static OABE_ERROR _dem_aes_gcm_encrypt(const uint8_t key[32],
