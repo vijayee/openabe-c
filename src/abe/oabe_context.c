@@ -916,7 +916,7 @@ OABE_ERROR oabe_context_cp_set_secret_key(OABE_ContextCP *ctx, const OABE_ByteSt
 
     /* Deserialize the secret key */
     OABE_ABESecretKey *key = NULL;
-    OABE_ERROR rc = oabe_secret_key_deserialize(secret_key, &key);
+    OABE_ERROR rc = oabe_secret_key_deserialize(secret_key, ctx->base.group, &key);
     if (rc != OABE_SUCCESS) {
         return rc;
     }

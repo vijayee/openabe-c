@@ -234,11 +234,14 @@ OABE_ERROR oabe_secret_key_serialize(const OABE_ABESecretKey *key, OABE_ByteStri
 
 /**
  * Deserialize ABE secret key.
+ * Reconstructs the master scalars (alpha/beta) from the packed ZP elements,
+ * so the group handle is required.
  * @param input Input ByteString
+ * @param group Group handle (curve must match the key's group)
  * @param key Output key (caller must free)
  * @return OABE_SUCCESS or error code
  */
-OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESecretKey **key);
+OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_GroupHandle group, OABE_ABESecretKey **key);
 
 /*============================================================================
  * ABE User Key

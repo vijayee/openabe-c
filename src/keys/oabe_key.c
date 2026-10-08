@@ -894,8 +894,21 @@ error:
     return rc;
 }
 
-OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESecretKey **key) {
-    if (!input || !key) {
+/* Zero a transient byte string's buffer before freeing it. The MSK scalars
+   are root trust material and oabe_bytestring_free does not zero the buffer
+   (same hygiene rationale as CRABS Audit N-17). */
+static void oabe_bytestring_cleanse_and_free(OABE_ByteString *bs) {
+    if (!bs) return;
+    const uint8_t *data = oabe_bytestring_get_const_ptr(bs);
+    size_t data_len = oabe_bytestring_get_size(bs);
+    if (data != NULL && data_len > 0) {
+        oabe_zeroize((void *)data, data_len);
+    }
+    oabe_bytestring_free(bs);
+}
+
+OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_GroupHandle group, OABE_ABESecretKey **key) {
+    if (!input || !group || !key) {
         return OABE_ERROR_INVALID_INPUT;
     }
 
@@ -943,10 +956,10 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESec
             rc = OABE_ERROR_OUT_OF_MEMORY;
             goto error;
         }
-        /* Deserialize ZP - need group handle, which we don't have here */
-        /* For now, create a placeholder - this should be fixed */
+        rc = oabe_zp_deserialize(group, alpha_data, &k->alpha);
+        oabe_bytestring_cleanse_and_free(alpha_data);
+        if (rc != OABE_SUCCESS) goto error;
         index += alpha_len;
-        oabe_bytestring_free(alpha_data);
     }
 
     /* Read beta */
@@ -966,8 +979,10 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESec
             rc = OABE_ERROR_OUT_OF_MEMORY;
             goto error;
         }
+        rc = oabe_zp_deserialize(group, beta_data, &k->beta);
+        oabe_bytestring_cleanse_and_free(beta_data);
+        if (rc != OABE_SUCCESS) goto error;
         index += beta_len;
-        oabe_bytestring_free(beta_data);
     }
 
     /* Read key_id */
@@ -1014,7 +1029,10 @@ OABE_ERROR oabe_secret_key_deserialize(const OABE_ByteString *input, OABE_ABESec
     return OABE_SUCCESS;
 
 error:
+    if (k->alpha) oabe_zp_free(k->alpha);
+    if (k->beta) oabe_zp_free(k->beta);
     if (k->base.key_id) oabe_free(k->base.key_id);
+    if (k->base.key_data) oabe_bytestring_free(k->base.key_data);
     oabe_free(k);
     return rc;
 }
