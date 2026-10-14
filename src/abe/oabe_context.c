@@ -526,11 +526,12 @@ static void oabe_context_cp_destroy(void *self) {
             oabe_keystore_free(ctx->keystore);
         }
         if (ctx->public_params) {
-            /* Note: g1_generator and g2_generator are aliases of ctx->g1/g2,
-             * so we need to NULL them before freeing params to avoid double-free.
-             * g1_alpha is owned by public_params. */
-            ctx->public_params->g1_generator = NULL;
-            ctx->public_params->g2_generator = NULL;
+            /* Owned-alias discipline: every aliased store (params->group,
+             * g1_generator/g2_generator) took an OABE_ADDREF, so params owns
+             * everything it releases. g1_alpha is owned by public_params and
+             * ctx->g1_alpha is a borrowed alias of it — ctx never derefs
+             * g1_alpha. The earlier "NULL the aliases before freeing" hack
+             * (which leaked the params references) is gone. */
             oabe_params_free(ctx->public_params);
         }
         if (ctx->secret_key) {
@@ -625,7 +626,17 @@ OABE_ERROR oabe_context_cp_generate_params(OABE_ContextCP *ctx, const char *para
     if (!ctx->public_params) {
         return OABE_ERROR_OUT_OF_MEMORY;
     }
+    /* oabe_params_destroy releases params->group, so the alias must carry an
+     * OWNED group reference — without it the teardown over-decrefs by one,
+     * the group frees while the context still holds its handle (valgrind:
+     * invalid read of ref_count in oabe_group_free), and the later free of
+     * the group's BN/point members writes into reallocated heap chunks —
+     * nondeterministic glibc "corrupted unsorted chunks" crashes. The alias
+     * sites in oabe_context_cp_generate_params (CP) and
+     * oabe_context_kp_generate_params (KP) are the only params->group
+     * aliases in the tree. */
     ctx->public_params->group = ctx->base.group;
+    OABE_ADDREF(ctx->base.group);
 
     /* Generate g1 */
     ctx->g1 = oabe_g1_new(ctx->base.group);
@@ -679,9 +690,14 @@ OABE_ERROR oabe_context_cp_generate_params(OABE_ContextCP *ctx, const char *para
     /* g1_alpha is owned by public_params, ctx just holds a pointer */
     ctx->public_params->g1_alpha = ctx->g1_alpha;
 
-    ctx->base.is_initialized = true;
+        ctx->base.is_initialized = true;
+    /* params_destroy releases g1_generator/g2_generator as owned members —
+     * the aliased stores must take owned references (alias discipline: an
+     * aliased store needs its own ref, or the shared teardown over-decrefs). */
     ctx->public_params->g1_generator = ctx->g1;
     ctx->public_params->g2_generator = ctx->g2;
+    if (ctx->g1) OABE_ADDREF(ctx->g1);
+    if (ctx->g2) OABE_ADDREF(ctx->g2);
 
     return OABE_SUCCESS;
 }
@@ -708,10 +724,16 @@ OABE_ERROR oabe_context_cp_set_public_params(OABE_ContextCP *ctx, const OABE_Byt
 
     ctx->public_params = params;
 
-    /* Store the specific elements for quick access */
+    /* Store the specific elements for quick access. The context's teardown
+     * derefs ctx->g1/g2 while params_destroy also releases its own generator
+     * members — each aliased store needs an OWNED reference or the element
+     * frees while ctx's handle still points at it. g1_alpha stays a plain
+     * borrowed alias: the context never derefs it (params owns it). */
     ctx->g1 = params->g1_generator;
     ctx->g2 = params->g2_generator;
     ctx->g1_alpha = params->g1_alpha;  /* May be NULL for KP-ABE params */
+    if (ctx->g1) OABE_ADDREF(ctx->g1);
+    if (ctx->g2) OABE_ADDREF(ctx->g2);
 
     return OABE_SUCCESS;
 }
@@ -1590,7 +1612,10 @@ OABE_ERROR oabe_context_kp_generate_params(OABE_ContextKP *ctx, const char *para
     if (!ctx->public_params) {
         return OABE_ERROR_OUT_OF_MEMORY;
     }
+    /* Same owned-alias discipline as the CP flow above: params_destroy
+     * releases params->group, so the aliased handle needs its own reference. */
     ctx->public_params->group = ctx->base.group;
+    OABE_ADDREF(ctx->base.group);
 
     /* Generate g1 and g2 generators */
     ctx->public_params->g1_generator = oabe_g1_new(ctx->base.group);
