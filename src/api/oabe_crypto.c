@@ -329,6 +329,7 @@ OABE_ERROR oabe_context_set_symmetric_key(OABE_Context *ctx,
 OABE_ERROR oabe_context_symmetric_encrypt(OABE_Context *ctx,
                                           const uint8_t *plaintext, size_t plaintext_len,
                                           const uint8_t *iv, size_t iv_len,
+                                          uint8_t out_tag[16],
                                           OABE_ByteString **ciphertext) {
     if (!ctx || !plaintext || !ciphertext) {
         return OABE_ERROR_INVALID_INPUT;
@@ -340,14 +341,19 @@ OABE_ERROR oabe_context_symmetric_encrypt(OABE_Context *ctx,
     }
 
     uint8_t tag[16];
-    return oabe_context_aes_encrypt((OABE_ContextAES *)ctx, plaintext, plaintext_len,
-                                    iv, iv_len, ciphertext, tag);
+    OABE_ERROR rc = oabe_context_aes_encrypt((OABE_ContextAES *)ctx, plaintext, plaintext_len,
+                                             iv, iv_len, ciphertext, tag);
+    if (rc == OABE_SUCCESS && out_tag) {
+        memcpy(out_tag, tag, 16);
+    }
+    return rc;
 }
 
 OABE_ERROR oabe_context_symmetric_decrypt(OABE_Context *ctx,
                                           const OABE_ByteString *ciphertext,
                                           uint8_t *plaintext, size_t *plaintext_len,
-                                          const uint8_t *iv, size_t iv_len) {
+                                          const uint8_t *iv, size_t iv_len,
+                                          const uint8_t tag[16]) {
     if (!ctx || !ciphertext || !plaintext || !plaintext_len) {
         return OABE_ERROR_INVALID_INPUT;
     }
@@ -357,11 +363,14 @@ OABE_ERROR oabe_context_symmetric_decrypt(OABE_Context *ctx,
         return OABE_ERROR_INVALID_CONTEXT;
     }
 
-    uint8_t tag[16] = {0};  /* Placeholder - should be passed in */
+    /* Audit M-6: the GCM tag MUST come from the wire — a hard-coded zero tag
+     * made every decrypt through this API fail authentication (and hand
+     * unauthenticated plaintext to a caller that ignored the error). */
     return oabe_context_aes_decrypt((OABE_ContextAES *)ctx,
                                     oabe_bytestring_get_const_ptr(ciphertext),
                                     oabe_bytestring_get_size(ciphertext),
-                                    iv, iv_len, tag, plaintext, plaintext_len);
+                                    iv, iv_len, (uint8_t *)tag,
+                                    plaintext, plaintext_len);
 }
 
 /*============================================================================
@@ -405,7 +414,6 @@ OABE_ERROR oabe_cp_decrypt(const OABE_ByteString *public_params,
     /* Set public parameters */
     OABE_ERROR rc = oabe_context_cp_set_public_params(ctx, public_params);
     if (rc != OABE_SUCCESS) {
-        fprintf(stderr, "DEBUG: set_public_params failed: %d\n", rc);
         oabe_context_cp_free(ctx);
         return rc;
     }

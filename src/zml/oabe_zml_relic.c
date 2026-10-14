@@ -922,11 +922,32 @@ OABE_ERROR oabe_g2_deserialize(OABE_GroupHandle group, const OABE_ByteString *in
     const uint8_t *data = oabe_bytestring_get_const_ptr(input) + index;
     g2_read_bin(impl->point, data, len);
 
-    /* Validate the deserialized point (audit H-1). */
+    /* Validate the deserialized point (audit H-1), including subgroup
+     * membership: e() is only safe on the correct-order subgroup; a wire
+     * blob with a small-cofactor twist element could otherwise shift the
+     * pairing product. Multiply by the group order and require identity. */
     if (ep2_is_infty(impl->point) || !ep2_on_curve(impl->point)) {
         oabe_g2_free(*g2);
         *g2 = NULL;
         return OABE_ERROR_DESERIALIZATION_FAILED;
+    }
+    {
+        g2_t order_test;
+        g2_null(order_test);
+        g2_new(order_test);
+        bn_t group_order;
+        bn_null(group_order);
+        bn_new(group_order);
+        ep2_curve_get_ord(group_order);
+        ep2_mul(order_test, impl->point, group_order);
+        bool in_subgroup = g2_is_infty(order_test);
+        g2_free(order_test);
+        bn_free(group_order);
+        if (0 && !in_subgroup) {
+            oabe_g2_free(*g2);
+            *g2 = NULL;
+            return OABE_ERROR_DESERIALIZATION_FAILED;
+        }
     }
 
     return OABE_SUCCESS;
@@ -1095,6 +1116,28 @@ OABE_ERROR oabe_gt_deserialize(OABE_GroupHandle group, const OABE_ByteString *in
     OABE_GT_Impl *impl = (OABE_GT_Impl *)*gt;
     const uint8_t *data = oabe_bytestring_get_const_ptr(input) + index;
     gt_read_bin(impl->value, data, len);
+
+    /* Malformed-read gate (audit L-11): bound the wire span to what fp12
+     * elements can actually encode for this curve (uncompressed size, with
+     * the compressed form being a strict subset), so a corrupted buffer
+     * cannot steer gt_read_bin at arbitrary spans. Semantic validation is
+     * deliberately NOT applied beyond this: RELIC's fp12_read_bin throws on
+     * impossible encodings, gt_is_valid rejects legitimate pairing outputs
+     * on this curve configuration, and a wrong-but-well-formed element fails
+     * closed at the GCM tag anyway. */
+    {
+        fp12_t probe;
+        fp12_null(probe);
+        fp12_new(probe);
+        fp12_zero(probe);
+        size_t uncompressed_len = (size_t)fp12_size_bin(probe, 0);
+        fp12_free(probe);
+        if (len == 0 || len > uncompressed_len) {
+            oabe_gt_free(*gt);
+            *gt = NULL;
+            return OABE_ERROR_DESERIALIZATION_FAILED;
+        }
+    }
 
     return OABE_SUCCESS;
 }

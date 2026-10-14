@@ -226,12 +226,15 @@ OABE_ERROR oabe_context_set_symmetric_key(OABE_Context *ctx,
  * @param plaintext_len Length of plaintext
  * @param iv Initialization vector (can be NULL for auto-generation)
  * @param iv_len Length of IV (16 bytes for AES-GCM)
+ * @param tag Output 16-byte GCM tag (the caller transports it alongside the
+ *        ciphertext and hands it back to the matching decrypt call)
  * @param ciphertext Output ByteString (caller must free)
  * @return OABE_SUCCESS or error code
  */
 OABE_ERROR oabe_context_symmetric_encrypt(OABE_Context *ctx,
                                           const uint8_t *plaintext, size_t plaintext_len,
                                           const uint8_t *iv, size_t iv_len,
+                                          uint8_t tag[16],
                                           OABE_ByteString **ciphertext);
 
 /**
@@ -242,12 +245,15 @@ OABE_ERROR oabe_context_symmetric_encrypt(OABE_Context *ctx,
  * @param plaintext_len Input: buffer size, Output: actual length
  * @param iv Initialization vector
  * @param iv_len Length of IV
+ * @param tag The 16-byte GCM tag transported with the ciphertext; decrypt
+ *        fails closed unless it authenticates the payload
  * @return OABE_SUCCESS or error code
  */
 OABE_ERROR oabe_context_symmetric_decrypt(OABE_Context *ctx,
                                           const OABE_ByteString *ciphertext,
                                           uint8_t *plaintext, size_t *plaintext_len,
-                                          const uint8_t *iv, size_t iv_len);
+                                          const uint8_t *iv, size_t iv_len,
+                                          const uint8_t tag[16]);
 
 /*============================================================================
  * Key Store Functions

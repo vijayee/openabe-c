@@ -31,6 +31,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include "openabe/oabe_context.h"
 #include "openabe/oabe_memory.h"
 #include "openabe/oabe_rng.h"
@@ -80,6 +81,7 @@ static OABE_ERROR _dem_aes_gcm_encrypt(const uint8_t key[32],
                                          uint8_t iv[12], uint8_t tag[16],
                                          uint8_t **ct_out, size_t *ct_len) {
   if (RAND_bytes(iv, 12) != 1) return OABE_ERROR_INVALID_RNG;
+  if (plaintext_len > (size_t)INT_MAX) return OABE_ERROR_INVALID_INPUT;
   EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
   if (!ctx) return OABE_ERROR_OUT_OF_MEMORY;
   OABE_ERROR rc = OABE_ERROR_ENCRYPTION_ERROR;
@@ -391,6 +393,7 @@ OABE_ERROR oabe_context_aes_encrypt(OABE_ContextAES *ctx,
         EVP_EncryptInit_ex(evp, NULL, NULL, ctx->key->key_bytes, iv) != 1) {
         goto enc_done;
     }
+    if (plaintext_len > (size_t)INT_MAX) { rc = OABE_ERROR_INVALID_INPUT; goto enc_done; }
     if (EVP_EncryptUpdate(evp, ct, &outl, plaintext, (int)plaintext_len) != 1) goto enc_done;
     if (EVP_EncryptFinal_ex(evp, ct + outl, &finall) != 1) goto enc_done;
     if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_GCM_GET_TAG, 16, tag) != 1) goto enc_done;
@@ -490,6 +493,7 @@ OABE_ERROR oabe_context_aes_decrypt(OABE_ContextAES *ctx,
         EVP_DecryptInit_ex(evp, NULL, NULL, ctx->key->key_bytes, stored_iv) != 1) {
         goto dec_done;
     }
+    if (encrypted_len > (size_t)INT_MAX) { rc = OABE_ERROR_INVALID_INPUT; goto dec_done; }
     if (EVP_DecryptUpdate(evp, plaintext, &outl, encrypted, (int)encrypted_len) != 1) goto dec_done;
     if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_GCM_SET_TAG, 16, (void *)tag) != 1) goto dec_done;
     if (EVP_DecryptFinal_ex(evp, plaintext + outl, &finall) != 1) goto dec_done;
@@ -1007,7 +1011,6 @@ OABE_ERROR oabe_context_cp_import_key(OABE_ContextCP *ctx, const char *key_id, c
     if (user_key->base.key_data && oabe_bytestring_get_size(user_key->base.key_data) > 0) {
         rc = deserialize_cp_key_elements(ctx->base.group, user_key->base.key_data, &user_key->key_elements);
         if (rc != OABE_SUCCESS) {
-            fprintf(stderr, "DEBUG: deserialize_cp_key_elements failed: %d\n", rc);
             oabe_user_key_free(user_key);
             return rc;
         }
