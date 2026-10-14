@@ -38,6 +38,7 @@ cd "$RELIC_WASM_BUILD"
 emcmake cmake "$RELIC_DIR" \
   -DCMAKE_BUILD_TYPE=Release \
   -DARITH=easy \
+  -DFP_PRIME=381 \
   -DARCH="" \
   -DWSIZE=32 \
   -DSTLIB=ON \
